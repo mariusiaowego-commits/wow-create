@@ -146,7 +146,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 - (void)buildPanelIfNeeded {
   if (self.panelWindow) return;
 
-  WoWPanel *panel = [[WoWPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 520)
+  WoWPanel *panel = [[WoWPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 534)
                                                 styleMask:NSWindowStyleMaskBorderless |
                                                           NSWindowStyleMaskNonactivatingPanel
                                                   backing:NSBackingStoreBuffered
@@ -169,81 +169,81 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   CGFloat width = 480;
 
   self.panelToggleButton = [NSButton buttonWithTitle:@"开启自动化" target:self action:@selector(toggleAutomation:)];
-  self.panelToggleButton.frame = NSMakeRect(20, 472, 140, 32);
+  self.panelToggleButton.frame = NSMakeRect(20, 486, 140, 32);
   self.panelToggleButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.panelToggleButton];
 
   self.hotKeyButton = [NSButton buttonWithTitle:@"停止键" target:self action:@selector(changeStopHotKey:)];
-  self.hotKeyButton.frame = NSMakeRect(168, 472, 192, 32);
+  self.hotKeyButton.frame = NSMakeRect(168, 486, 192, 32);
   self.hotKeyButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.hotKeyButton];
   [self updateHotKeyButton];
 
   NSButton *quitButton = [NSButton buttonWithTitle:@"退出" target:self action:@selector(quitApp:)];
-  quitButton.frame = NSMakeRect(width - 80, 472, 60, 32);
+  quitButton.frame = NSMakeRect(width - 80, 486, 60, 32);
   quitButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:quitButton];
 
   self.panelStatusLabel = [NSTextField labelWithString:@"状态：已停止"];
-  self.panelStatusLabel.frame = NSMakeRect(20, 444, width - 40, 20);
+  self.panelStatusLabel.frame = NSMakeRect(20, 458, width - 40, 20);
   self.panelStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [content addSubview:self.panelStatusLabel];
 
   self.panelScreenLabel = [NSTextField labelWithString:@"识别：等待启动"];
-  self.panelScreenLabel.frame = NSMakeRect(20, 420, 210, 20);
+  self.panelScreenLabel.frame = NSMakeRect(20, 434, 210, 20);
   self.panelScreenLabel.font = [NSFont systemFontOfSize:12];
   self.panelScreenLabel.textColor = [NSColor secondaryLabelColor];
   [content addSubview:self.panelScreenLabel];
 
   self.panelCountersLabel = [NSTextField labelWithString:@"第 0 轮 · 失败 0 · 操作 0"];
-  self.panelCountersLabel.frame = NSMakeRect(230, 420, width - 250, 20);
+  self.panelCountersLabel.frame = NSMakeRect(230, 434, width - 250, 20);
   self.panelCountersLabel.alignment = NSTextAlignmentRight;
   self.panelCountersLabel.font = [NSFont systemFontOfSize:12];
   self.panelCountersLabel.textColor = [NSColor secondaryLabelColor];
   [content addSubview:self.panelCountersLabel];
 
   NSTextField *mainLabel = [NSTextField labelWithString:@"主名"];
-  mainLabel.frame = NSMakeRect(20, 391, 34, 18);
+  mainLabel.frame = NSMakeRect(20, 405, 34, 18);
   [content addSubview:mainLabel];
-  self.mainNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(56, 386, 120, 24)];
+  self.mainNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(56, 400, 120, 24)];
   self.mainNameField.stringValue = [NSUserDefaults.standardUserDefaults stringForKey:@"MainName"] ?: @"ask";
   self.mainNameField.placeholderString = @"ask";
   [content addSubview:self.mainNameField];
 
   NSTextField *secondaryLabel = [NSTextField labelWithString:@"副名"];
-  secondaryLabel.frame = NSMakeRect(196, 391, 34, 18);
+  secondaryLabel.frame = NSMakeRect(196, 405, 34, 18);
   [content addSubview:secondaryLabel];
-  self.secondaryNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(232, 386, 180, 24)];
+  self.secondaryNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(232, 400, 180, 24)];
   self.secondaryNameField.stringValue = [NSUserDefaults.standardUserDefaults stringForKey:@"SecondaryName"] ?: @"timemachine";
   self.secondaryNameField.placeholderString = @"timemachine";
   [content addSubview:self.secondaryNameField];
 
   self.dryRunCheckbox = [NSButton checkboxWithTitle:@"演练（不点击）" target:self action:@selector(toggleDryRun:)];
-  self.dryRunCheckbox.frame = NSMakeRect(20, 356, 130, 20);
+  self.dryRunCheckbox.frame = NSMakeRect(20, 370, 130, 20);
   self.dryRunCheckbox.state = NSControlStateValueOff;
   [content addSubview:self.dryRunCheckbox];
 
   self.singleStepCheckbox = [NSButton checkboxWithTitle:@"单步模式" target:self action:@selector(toggleSingleStep:)];
-  self.singleStepCheckbox.frame = NSMakeRect(154, 356, 100, 20);
+  self.singleStepCheckbox.frame = NSMakeRect(154, 370, 100, 20);
   self.singleStepCheckbox.state = NSControlStateValueOff;
   [content addSubview:self.singleStepCheckbox];
 
   self.stepButton = [NSButton buttonWithTitle:@"执行一步" target:self action:@selector(stepOnce:)];
-  self.stepButton.frame = NSMakeRect(width - 140, 350, 120, 28);
+  self.stepButton.frame = NSMakeRect(width - 140, 364, 120, 28);
   self.stepButton.bezelStyle = NSBezelStyleRounded;
   self.stepButton.enabled = NO;
   [content addSubview:self.stepButton];
 
   NSTextField *hint = [NSTextField labelWithString:
     @"仅 WoW 前台时操作，切出焦点立即停止。默认停止键 ⌃⌥⌘⇧K，可在上方重录。\n上限：30 轮 / 40 次失败 / 30 分钟；不会读取或保存账号密码。"];
-  hint.frame = NSMakeRect(20, 308, width - 40, 36);
+  hint.frame = NSMakeRect(20, 322, width - 40, 36);
   hint.font = [NSFont systemFontOfSize:11];
   hint.textColor = [NSColor secondaryLabelColor];
   hint.lineBreakMode = NSLineBreakByWordWrapping;
   hint.maximumNumberOfLines = 2;
   [content addSubview:hint];
 
-  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 40, width - 40, 248)];
+  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 54, width - 40, 234)];
   scroll.hasVerticalScroller = YES;
   scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.borderType = NSBezelBorder;
@@ -258,10 +258,10 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 
   self.panelLogView = logView;
   self.versionLabel = [NSTextField labelWithString:@"版本：读取中…"];
-  self.versionLabel.frame = NSMakeRect(20, 8, width - 40, 28);
+  self.versionLabel.frame = NSMakeRect(20, 8, width - 40, 40);
   self.versionLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
   self.versionLabel.textColor = [NSColor secondaryLabelColor];
-  self.versionLabel.maximumNumberOfLines = 2;
+  self.versionLabel.maximumNumberOfLines = 3;
   self.versionLabel.lineBreakMode = NSLineBreakByWordWrapping;
   [content addSubview:self.versionLabel];
   self.panelWindow = panel;
@@ -469,6 +469,13 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
       [text appendFormat:@"\n磁盘  %@  ⚠ 已更新，重启 App", diskVersion];
       self.versionLabel.textColor = [NSColor systemOrangeColor];
     }
+  }
+  BOOL axTrusted = AXIsProcessTrusted();
+  BOOL screenReady = CGPreflightScreenCaptureAccess();
+  [text appendFormat:@"\n权限  辅助功能 %@ · 屏幕录制 %@", axTrusted ? @"✓" : @"✗",
+                     screenReady ? @"✓" : @"✗（授权后需重启 App）"];
+  if (!axTrusted || !screenReady) {
+    self.versionLabel.textColor = [NSColor systemOrangeColor];
   }
   self.versionLabel.stringValue = text;
 }
