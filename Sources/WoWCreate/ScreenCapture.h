@@ -14,6 +14,8 @@ NS_ASSUME_NONNULL_BEGIN
 - (nullable WindowSnapshot *)snapshotForTargetAlias:(NSString *)targetAlias;
 - (BOOL)isRect:(CGRect)rect redDominantInImage:(CGImageRef)image;
 - (BOOL)isRect:(CGRect)rect grayDominantInImage:(CGImageRef)image;
+- (double)redRatioInRect:(CGRect)rect image:(CGImageRef)image;
+- (double)brightnessInRect:(CGRect)rect image:(CGImageRef)image;
 @end
 
 NS_ASSUME_NONNULL_END

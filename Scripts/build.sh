@@ -17,7 +17,8 @@ clang -fobjc-arc -O2 -std=gnu11 \
   -framework Carbon \
   "$ROOT/Sources/WoWCreate/main.m" \
   "$ROOT/Sources/WoWCreate/AppDelegate.m" \
-  "$ROOT/Sources/WoWCreate/AutomationEngine.m" \
+  "$ROOT/Sources/WoWCreate/FlowEngine.m" \
+  "$ROOT/Sources/WoWCreate/FlowProfile.m" \
   "$ROOT/Sources/WoWCreate/ScreenCapture.m" \
   "$ROOT/Sources/WoWCreate/HotKeyMonitor.m" \
   -o "$MACOS/WoWCreate"
