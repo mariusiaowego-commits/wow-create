@@ -157,6 +157,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   panel.backgroundColor = NSColor.clearColor;
   panel.hasShadow = YES;
   panel.delegate = self;
+  panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
   panel.movableByWindowBackground = YES;
   panel.becomesKeyOnlyIfNeeded = YES;
   panel.floatingPanel = YES;
@@ -166,9 +167,9 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   content.wantsLayer = YES;
   content.layer.cornerRadius = 12;
   content.layer.masksToBounds = YES;
-  content.layer.backgroundColor = NSColor.windowBackgroundColor.CGColor;
+  content.layer.backgroundColor = [NSColor colorWithWhite:0.14 alpha:1.0].CGColor;
   content.layer.borderWidth = 1;
-  content.layer.borderColor = NSColor.separatorColor.CGColor;
+  content.layer.borderColor = [NSColor colorWithWhite:0.30 alpha:1.0].CGColor;
   CGFloat width = 480;
 
   self.panelToggleButton = [NSButton buttonWithTitle:@"开启自动化" target:self action:@selector(toggleAutomation:)];
@@ -189,20 +190,22 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 
   self.panelStatusLabel = [NSTextField labelWithString:@"状态：已停止"];
   self.panelStatusLabel.frame = NSMakeRect(20, 458, width - 40, 20);
+  self.panelStatusLabel.font = [NSFont boldSystemFontOfSize:13];
+  self.panelStatusLabel.textColor = [NSColor colorWithWhite:0.97 alpha:1.0];
   self.panelStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [content addSubview:self.panelStatusLabel];
 
   self.panelScreenLabel = [NSTextField labelWithString:@"识别：等待启动"];
   self.panelScreenLabel.frame = NSMakeRect(20, 434, 210, 20);
   self.panelScreenLabel.font = [NSFont systemFontOfSize:12];
-  self.panelScreenLabel.textColor = [NSColor secondaryLabelColor];
+  self.panelScreenLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
   [content addSubview:self.panelScreenLabel];
 
   self.panelCountersLabel = [NSTextField labelWithString:@"第 0 轮 · 失败 0 · 操作 0"];
   self.panelCountersLabel.frame = NSMakeRect(230, 434, width - 250, 20);
   self.panelCountersLabel.alignment = NSTextAlignmentRight;
   self.panelCountersLabel.font = [NSFont systemFontOfSize:12];
-  self.panelCountersLabel.textColor = [NSColor secondaryLabelColor];
+  self.panelCountersLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
   [content addSubview:self.panelCountersLabel];
 
   NSTextField *mainLabel = [NSTextField labelWithString:@"主名"];
@@ -241,7 +244,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     @"运行中面板常驻且不抢焦点；拖动面板空白处可调位置。默认停止键 ⌃⌥⌘⇧K，可在上方重录。\n上限：30 轮 / 40 次失败 / 30 分钟；不会读取或保存账号密码。"];
   hint.frame = NSMakeRect(20, 322, width - 40, 36);
   hint.font = [NSFont systemFontOfSize:11];
-  hint.textColor = [NSColor secondaryLabelColor];
+  hint.textColor = [NSColor colorWithWhite:0.68 alpha:1.0];
   hint.lineBreakMode = NSLineBreakByWordWrapping;
   hint.maximumNumberOfLines = 2;
   [content addSubview:hint];
@@ -255,6 +258,9 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   logView.editable = NO;
   logView.selectable = YES;
   logView.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+  logView.textColor = [NSColor colorWithWhite:0.92 alpha:1.0];
+  logView.backgroundColor = [NSColor colorWithWhite:0.10 alpha:1.0];
+  logView.drawsBackground = YES;
   logView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.documentView = logView;
   [content addSubview:scroll];
@@ -263,11 +269,14 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   self.versionLabel = [NSTextField labelWithString:@"版本：读取中…"];
   self.versionLabel.frame = NSMakeRect(20, 8, width - 40, 40);
   self.versionLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
-  self.versionLabel.textColor = [NSColor secondaryLabelColor];
+  self.versionLabel.textColor = [NSColor colorWithWhite:0.72 alpha:1.0];
   self.versionLabel.maximumNumberOfLines = 3;
   self.versionLabel.lineBreakMode = NSLineBreakByWordWrapping;
   [content addSubview:self.versionLabel];
   self.panelWindow = panel;
+  if ([NSUserDefaults.standardUserDefaults stringForKey:@"PanelCustomFrame"].length) {
+    self.panelHasCustomOrigin = YES;
+  }
 }
 
 - (BOOL)anchorPanelToStatusItem {
@@ -349,6 +358,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 - (void)windowDidMove:(NSNotification *)notification {
   if (notification.object != self.panelWindow || self.anchoringPanel) return;
   if (!self.panelWindow.isVisible) return;
+  if ((NSEvent.pressedMouseButtons & 1) == 0) return;
   self.panelHasCustomOrigin = YES;
   [NSUserDefaults.standardUserDefaults setObject:NSStringFromRect(self.panelWindow.frame)
                                           forKey:@"PanelCustomFrame"];
@@ -503,7 +513,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     NSString *diskVersion = [self versionStringFromInfo:diskInfo];
     if ([diskVersion isEqualToString:self.currentVersion]) {
       [text appendFormat:@"\n磁盘  %@  ✓ 已是最新", diskVersion];
-      self.versionLabel.textColor = [NSColor secondaryLabelColor];
+      self.versionLabel.textColor = [NSColor colorWithWhite:0.72 alpha:1.0];
     } else {
       [text appendFormat:@"\n磁盘  %@  ⚠ 已更新，重启 App", diskVersion];
       self.versionLabel.textColor = [NSColor systemOrangeColor];
