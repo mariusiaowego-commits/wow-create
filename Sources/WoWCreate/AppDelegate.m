@@ -2,20 +2,34 @@
 #import "AutomationEngine.h"
 #import "HotKeyMonitor.h"
 #import <AppKit/AppKit.h>
+#import <Carbon/Carbon.h>
 
 @interface AppDelegate ()
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, strong) AutomationEngine *engine;
 @property (nonatomic, strong) HotKeyMonitor *hotKey;
-@property (nonatomic, strong) NSMenuItem *toggleItem;
-@property (nonatomic, strong) NSMenuItem *statusLineItem;
-@property (nonatomic, strong) NSMenuItem *successDetectionItem;
 @property (nonatomic, strong) NSWindow *panelWindow;
 @property (nonatomic, strong) NSButton *panelToggleButton;
 @property (nonatomic, strong) NSTextField *panelStatusLabel;
 @property (nonatomic, strong) NSTextView *panelLogView;
+@property (nonatomic, strong) NSButton *successDetectionCheckbox;
+@property (nonatomic, strong) NSButton *hotKeyButton;
+@property (nonatomic, strong) NSWindow *hotKeyRecordWindow;
+@property (nonatomic, strong) NSTextField *hotKeyRecordLabel;
+@property (nonatomic, strong) id localKeyMonitor;
+@property (nonatomic, strong) id globalKeyMonitor;
 @property (nonatomic, copy, nullable) NSString *lastStatus;
 @end
+
+static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
+  NSUInteger flags = event.modifierFlags;
+  UInt32 modifiers = 0;
+  if (flags & NSEventModifierFlagCommand) modifiers |= cmdKey;
+  if (flags & NSEventModifierFlagOption) modifiers |= optionKey;
+  if (flags & NSEventModifierFlagControl) modifiers |= controlKey;
+  if (flags & NSEventModifierFlagShift) modifiers |= shiftKey;
+  return modifiers;
+}
 
 @implementation AppDelegate
 
@@ -25,39 +39,24 @@
 
   self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
   self.statusItem.button.title = @"W";
-  self.statusItem.button.toolTip = @"WoWCreate - 点击开启/停止自动创建角色";
+  self.statusItem.button.toolTip = @"WoWCreate - 点击打开控制面板";
+  self.statusItem.button.target = self;
+  self.statusItem.button.action = @selector(showPanel);
 
-  NSMenu *menu = [[NSMenu alloc] initWithTitle:@"WoWCreate"];
-  NSMenuItem *openItem = [[NSMenuItem alloc] initWithTitle:@"打开控制面板" action:@selector(showPanel) keyEquivalent:@""];
-  openItem.target = self;
-  [menu addItem:openItem];
-  self.toggleItem = [[NSMenuItem alloc] initWithTitle:@"开启自动化" action:@selector(toggleAutomation:) keyEquivalent:@""];
-  self.toggleItem.target = self;
-  [menu addItem:self.toggleItem];
-  self.statusLineItem = [[NSMenuItem alloc] initWithTitle:@"状态：已停止" action:NULL keyEquivalent:@""];
-  self.statusLineItem.enabled = NO;
-  [menu addItem:self.statusLineItem];
-  [menu addItem:[NSMenuItem separatorItem]];
-  self.successDetectionItem = [[NSMenuItem alloc] initWithTitle:@"创建界面消失即停止（保守）" action:@selector(toggleSuccessDetection:) keyEquivalent:@""];
-  self.successDetectionItem.target = self;
-  self.successDetectionItem.state = NSControlStateValueOn;
-  [menu addItem:self.successDetectionItem];
-  NSMenuItem *hotKeyItem = [[NSMenuItem alloc] initWithTitle:@"全局停止：⌃⌥⌘W" action:NULL keyEquivalent:@""];
-  hotKeyItem.enabled = NO;
-  [menu addItem:hotKeyItem];
-  [menu addItem:[[NSMenuItem alloc] initWithTitle:@"退出" action:@selector(quitApp:) keyEquivalent:@"q"]];
-  self.statusItem.menu = menu;
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  UInt32 keyCode = (UInt32)[defaults integerForKey:@"StopHotKeyKeyCode"];
+  if (keyCode == 0) keyCode = kVK_ANSI_K;
+  UInt32 modifiers = (UInt32)[defaults integerForKey:@"StopHotKeyModifiers"];
+  if (modifiers == 0) modifiers = controlKey | optionKey | cmdKey;
 
   self.engine = [[AutomationEngine alloc] init];
   self.engine.stopWhenCreationScreenDisappears = YES;
   __weak AppDelegate *weakSelf = self;
   self.engine.onStateChange = ^(BOOL running, NSString *status) {
     dispatch_async(dispatch_get_main_queue(), ^{
-      weakSelf.toggleItem.title = running ? @"停止自动化" : @"开启自动化";
-      weakSelf.statusLineItem.title = [NSString stringWithFormat:@"状态：%@", status];
-      weakSelf.statusItem.button.title = running ? @"W●" : @"W";
       weakSelf.panelToggleButton.title = running ? @"停止自动化" : @"开启自动化";
       weakSelf.panelStatusLabel.stringValue = [NSString stringWithFormat:@"状态：%@", status];
+      weakSelf.statusItem.button.title = running ? @"W●" : @"W";
       if (![status isEqualToString:weakSelf.lastStatus]) {
         weakSelf.lastStatus = status;
         [weakSelf appendLog:status];
@@ -65,7 +64,7 @@
     });
   };
 
-  self.hotKey = [[HotKeyMonitor alloc] init];
+  self.hotKey = [[HotKeyMonitor alloc] initWithKeyCode:keyCode modifiers:modifiers];
   self.hotKey.onStop = ^{
     dispatch_async(dispatch_get_main_queue(), ^{
       [weakSelf.engine stop];
@@ -91,35 +90,53 @@
 - (void)buildPanelIfNeeded {
   if (self.panelWindow) return;
 
-  NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 300)
+  NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 340)
                                                  styleMask:NSWindowStyleMaskTitled |
                                                            NSWindowStyleMaskClosable |
                                                            NSWindowStyleMaskMiniaturizable
                                                    backing:NSBackingStoreBuffered
                                                      defer:NO];
   panel.title = @"WoWCreate";
-  panel.minSize = NSMakeSize(380, 240);
+  panel.minSize = NSMakeSize(420, 300);
   panel.delegate = self;
 
   NSView *content = panel.contentView;
 
   self.panelToggleButton = [NSButton buttonWithTitle:@"开启自动化" target:self action:@selector(toggleAutomation:)];
-  self.panelToggleButton.frame = NSMakeRect(20, 248, 150, 32);
+  self.panelToggleButton.frame = NSMakeRect(20, 302, 140, 30);
   self.panelToggleButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.panelToggleButton];
 
+  self.hotKeyButton = [NSButton buttonWithTitle:@"停止键" target:self action:@selector(changeStopHotKey:)];
+  self.hotKeyButton.frame = NSMakeRect(170, 302, 190, 30);
+  self.hotKeyButton.bezelStyle = NSBezelStyleRounded;
+  [content addSubview:self.hotKeyButton];
+  [self updateHotKeyButton];
+
+  NSButton *quitButton = [NSButton buttonWithTitle:@"退出" target:self action:@selector(quitApp:)];
+  quitButton.frame = NSMakeRect(370, 302, 70, 30);
+  quitButton.bezelStyle = NSBezelStyleRounded;
+  [content addSubview:quitButton];
+
   self.panelStatusLabel = [NSTextField labelWithString:@"状态：已停止"];
-  self.panelStatusLabel.frame = NSMakeRect(184, 255, 250, 20);
+  self.panelStatusLabel.frame = NSMakeRect(20, 274, 420, 20);
   self.panelStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
   [content addSubview:self.panelStatusLabel];
 
-  NSTextField *hint = [NSTextField labelWithString:@"启动后请保持 WoW 创建角色界面；⌃⌥⌘W 立即停止。"];
-  hint.frame = NSMakeRect(20, 226, 420, 18);
+  self.successDetectionCheckbox = [NSButton checkboxWithTitle:@"创建界面消失即停止（保守）"
+                                                       target:self
+                                                       action:@selector(toggleSuccessDetection:)];
+  self.successDetectionCheckbox.frame = NSMakeRect(20, 248, 420, 20);
+  self.successDetectionCheckbox.state = self.engine.stopWhenCreationScreenDisappears ? NSControlStateValueOn : NSControlStateValueOff;
+  [content addSubview:self.successDetectionCheckbox];
+
+  NSTextField *hint = [NSTextField labelWithString:@"点击菜单栏 W 或 Dock 图标可开关面板；停止键冲突时点“停止键”重新录制。"];
+  hint.frame = NSMakeRect(20, 224, 420, 18);
   hint.font = [NSFont systemFontOfSize:11];
   hint.textColor = [NSColor secondaryLabelColor];
   [content addSubview:hint];
 
-  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 20, 420, 194)];
+  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 20, 420, 192)];
   scroll.hasVerticalScroller = YES;
   scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.borderType = NSBezelBorder;
@@ -136,8 +153,23 @@
   self.panelWindow = panel;
 }
 
+- (void)anchorPanelToStatusItem {
+  NSWindow *statusWindow = self.statusItem.button.window;
+  if (!statusWindow) return;
+
+  NSRect statusFrame = statusWindow.frame;
+  NSRect panelFrame = self.panelWindow.frame;
+  CGFloat x = NSMidX(statusFrame) - NSWidth(panelFrame) / 2;
+  CGFloat y = NSMinY(statusFrame) - NSHeight(panelFrame) - 4;
+  NSRect screenFrame = (statusWindow.screen ?: NSScreen.mainScreen).visibleFrame;
+  x = MAX(NSMinX(screenFrame), MIN(x, NSMaxX(screenFrame) - NSWidth(panelFrame)));
+  y = MAX(NSMinY(screenFrame), MIN(y, NSMaxY(screenFrame) - NSHeight(panelFrame)));
+  [self.panelWindow setFrameOrigin:NSMakePoint(x, y)];
+}
+
 - (void)showPanel {
   [self buildPanelIfNeeded];
+  [self anchorPanelToStatusItem];
   [self.panelWindow makeKeyAndOrderFront:nil];
   SEL activateSelector = @selector(activateWithOptions:);
   if ([NSApp respondsToSelector:activateSelector]) {
@@ -166,7 +198,7 @@
   (void)sender;
   BOOL enabled = self.engine.stopWhenCreationScreenDisappears;
   self.engine.stopWhenCreationScreenDisappears = !enabled;
-  self.successDetectionItem.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
+  self.successDetectionCheckbox.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
 }
 
 - (void)toggleAutomation:(id)sender {
@@ -178,12 +210,104 @@
   }
 }
 
+- (void)updateHotKeyButton {
+  if (!self.hotKeyButton || !self.hotKey) return;
+  NSString *display = [HotKeyMonitor displayStringForKeyCode:self.hotKey.keyCode modifiers:self.hotKey.modifiers];
+  self.hotKeyButton.title = [NSString stringWithFormat:@"停止键：%@", display];
+}
+
+- (void)changeStopHotKey:(id)sender {
+  (void)sender;
+  [self stopHotKeyRecordingMonitors];
+
+  NSWindow *window = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 380, 130)
+                                                 styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+                                                   backing:NSBackingStoreBuffered
+                                                     defer:NO];
+  window.title = @"设置全局停止键";
+  window.delegate = self;
+
+  NSTextField *label = [NSTextField labelWithString:@"按下新组合键（Esc 取消）"];
+  label.frame = NSMakeRect(20, 76, 340, 34);
+  label.lineBreakMode = NSLineBreakByWordWrapping;
+  [[window contentView] addSubview:label];
+
+  NSTextField *note = [NSTextField labelWithString:@"至少包含 Command / Control / Option 之一"];
+  note.frame = NSMakeRect(20, 48, 340, 18);
+  note.font = [NSFont systemFontOfSize:11];
+  note.textColor = [NSColor secondaryLabelColor];
+  [[window contentView] addSubview:note];
+
+  self.hotKeyRecordWindow = window;
+  self.hotKeyRecordLabel = label;
+  [window center];
+  [window makeKeyAndOrderFront:nil];
+
+  __weak AppDelegate *weakSelf = self;
+  self.localKeyMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^NSEvent *(NSEvent *event) {
+    if ([weakSelf handleRecordedKeyEvent:event]) return nil;
+    return event;
+  }];
+  self.globalKeyMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskKeyDown handler:^(NSEvent *event) {
+    [weakSelf handleRecordedKeyEvent:event];
+  }];
+}
+
+- (BOOL)handleRecordedKeyEvent:(NSEvent *)event {
+  if (!self.hotKeyRecordWindow.isVisible) return NO;
+
+  UInt32 keyCode = (UInt32)event.keyCode;
+  if (keyCode == kVK_Escape) {
+    [self cancelHotKeyRecording];
+    return YES;
+  }
+
+  UInt32 modifiers = CarbonModifiersFromEvent(event);
+  if (!(modifiers & (controlKey | optionKey | cmdKey))) {
+    self.hotKeyRecordLabel.stringValue = @"请至少带 Command / Control / Option，再按一次";
+    return YES;
+  }
+
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  [defaults setInteger:(NSInteger)keyCode forKey:@"StopHotKeyKeyCode"];
+  [defaults setInteger:(NSInteger)modifiers forKey:@"StopHotKeyModifiers"];
+  [defaults synchronize];
+  [self.hotKey setKeyCode:keyCode modifiers:modifiers];
+  [self updateHotKeyButton];
+  [self appendLog:[NSString stringWithFormat:@"全局停止键已改为 %@",
+                   [HotKeyMonitor displayStringForKeyCode:keyCode modifiers:modifiers]]];
+  [self cancelHotKeyRecording];
+  return YES;
+}
+
+- (void)stopHotKeyRecordingMonitors {
+  if (self.localKeyMonitor) {
+    [NSEvent removeMonitor:self.localKeyMonitor];
+    self.localKeyMonitor = nil;
+  }
+  if (self.globalKeyMonitor) {
+    [NSEvent removeMonitor:self.globalKeyMonitor];
+    self.globalKeyMonitor = nil;
+  }
+}
+
+- (void)cancelHotKeyRecording {
+  [self stopHotKeyRecordingMonitors];
+  [self.hotKeyRecordWindow orderOut:nil];
+  self.hotKeyRecordWindow = nil;
+  self.hotKeyRecordLabel = nil;
+}
+
 - (void)quitApp:(id)sender {
   (void)sender;
   [NSApp terminate:nil];
 }
 
 - (BOOL)windowShouldClose:(NSWindow *)window {
+  if (window == self.hotKeyRecordWindow) {
+    [self cancelHotKeyRecording];
+    return NO;
+  }
   [window orderOut:nil];
   return NO;
 }
