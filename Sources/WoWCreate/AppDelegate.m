@@ -316,7 +316,8 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     NSPoint statusMid = NSMakePoint(NSMidX(statusFrame), NSMidY(statusFrame));
     NSScreen *statusScreen = nil;
     for (NSScreen *candidate in NSScreen.screens) {
-      if (NSPointInRect(statusMid, candidate.frame)) {
+      if (NSPointInRect(statusMid, candidate.frame) &&
+          NSMinY(statusFrame) >= NSMaxY(candidate.visibleFrame) - 1) {
         statusScreen = candidate;
         break;
       }
