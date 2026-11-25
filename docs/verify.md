@@ -65,3 +65,19 @@ none
 1. 辅助功能 + 屏幕录制权限是否已勾选。
 2. 实机跑一轮：重点看“规则集”顶部点击与命名输入是否被游戏接受。
 3. 若某一步点偏，记录日志里的“识别”行与分辨率，再调 `FlowProfile.m`。
+
+## 面板 v2（2026-11-25）
+
+- 无标题栏：`NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel`，
+  `canBecomeKeyWindow=YES`、`canBecomeMainWindow=NO`；截图确认左上角无关闭/最小化按钮。
+- 失焦收起：`windowDidResignKey:` + 全局鼠标监视（点面板外）+ `NSWorkspaceDidActivateApplicationNotification`。
+  点状态栏图标本身不算失焦（`statusItemScreenRect` 命中则跳过），保证图标可切换开关。
+- 版本行实测（内建屏截图）：
+  `当前  v0.2.0 · 7cd20a4-dirty · 2026-11-25 15:02`
+  `磁盘  v0.2.0 · 7cd20a4-dirty · 2026-11-25 15:02  ✓ 已是最新`
+- 状态栏图标：原文字 `W` 在内建屏深色菜单栏不可见（外接屏可见），改为模板图 `w.circle`；
+  外接屏截图确认图标正常显示。
+- 锚定实测（外接屏）：状态栏按钮 `{{2703,1158},{32.5,29}}`，面板 `{{2479,633},{480,520}}`，
+  顶边在菜单栏下方 4px，水平中心与图标中心对齐。
+- 启动首帧：状态栏按钮尚未布局（`status={{0,-11}}`）时先不显示面板，50ms 轮询至布局完成再显示，避免左下角闪帧。
+- 模拟点击（CGEvent）在本机被系统丢弃：`AXIsProcessTrusted=false`，属权限问题，不计入 App 失败。

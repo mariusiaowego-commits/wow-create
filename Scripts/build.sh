@@ -9,12 +9,19 @@ MACOS="$CONTENTS/MacOS"
 rm -rf "$APP"
 mkdir -p "$MACOS" "$CONTENTS/Resources"
 
+GIT_SHORT="$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo nogit)"
+if ! git -C "$ROOT" diff --quiet 2>/dev/null; then
+  GIT_SHORT="${GIT_SHORT}-dirty"
+fi
+BUILD_TIME="$(date '+%Y-%m-%d %H:%M')"
+
 clang -fobjc-arc -O2 -std=gnu11 \
   -framework AppKit \
   -framework ApplicationServices \
   -framework CoreGraphics \
   -framework Vision \
   -framework Carbon \
+  -framework QuartzCore \
   "$ROOT/Sources/WoWCreate/main.m" \
   "$ROOT/Sources/WoWCreate/AppDelegate.m" \
   "$ROOT/Sources/WoWCreate/FlowEngine.m" \
@@ -23,7 +30,7 @@ clang -fobjc-arc -O2 -std=gnu11 \
   "$ROOT/Sources/WoWCreate/HotKeyMonitor.m" \
   -o "$MACOS/WoWCreate"
 
-cat > "$CONTENTS/Info.plist" <<'PLIST'
+cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -32,8 +39,9 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>CFBundleIdentifier</key><string>local.wowcreate.app</string>
   <key>CFBundleName</key><string>WoWCreate</string>
   <key>CFBundleDisplayName</key><string>WoWCreate</string>
-  <key>CFBundleShortVersionString</key><string>0.1.0</string>
-  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>0.2.0</string>
+  <key>CFBundleVersion</key><string>${GIT_SHORT}</string>
+  <key>WoWCreateBuildTime</key><string>${BUILD_TIME}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><false/>
   <key>NSHighResolutionCapable</key><true/>
