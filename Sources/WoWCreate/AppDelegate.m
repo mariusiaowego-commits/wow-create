@@ -13,6 +13,8 @@
 @property (nonatomic, strong) NSTextField *panelStatusLabel;
 @property (nonatomic, strong) NSTextView *panelLogView;
 @property (nonatomic, strong) NSButton *successDetectionCheckbox;
+@property (nonatomic, strong) NSButton *manualConfirmationCheckbox;
+@property (nonatomic, strong) NSButton *confirmButton;
 @property (nonatomic, strong) NSButton *hotKeyButton;
 @property (nonatomic, strong) NSWindow *hotKeyRecordWindow;
 @property (nonatomic, strong) NSTextField *hotKeyRecordLabel;
@@ -51,6 +53,8 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 
   self.engine = [[AutomationEngine alloc] init];
   self.engine.stopWhenCreationScreenDisappears = YES;
+  self.engine.requireManualConfirmation = NO;
+  self.engine.stopWhenFocusLeaves = YES;
   __weak AppDelegate *weakSelf = self;
   self.engine.onStateChange = ^(BOOL running, NSString *status) {
     dispatch_async(dispatch_get_main_queue(), ^{
@@ -61,6 +65,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
         weakSelf.lastStatus = status;
         [weakSelf appendLog:status];
       }
+      [weakSelf updateConfirmationButton];
     });
   };
 
@@ -90,7 +95,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 - (void)buildPanelIfNeeded {
   if (self.panelWindow) return;
 
-  NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 340)
+  NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 390)
                                                  styleMask:NSWindowStyleMaskTitled |
                                                            NSWindowStyleMaskClosable |
                                                            NSWindowStyleMaskMiniaturizable
@@ -126,17 +131,30 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   self.successDetectionCheckbox = [NSButton checkboxWithTitle:@"创建界面消失即停止（保守）"
                                                        target:self
                                                        action:@selector(toggleSuccessDetection:)];
-  self.successDetectionCheckbox.frame = NSMakeRect(20, 248, 420, 20);
+  self.successDetectionCheckbox.frame = NSMakeRect(20, 250, 420, 20);
   self.successDetectionCheckbox.state = self.engine.stopWhenCreationScreenDisappears ? NSControlStateValueOn : NSControlStateValueOff;
   [content addSubview:self.successDetectionCheckbox];
 
-  NSTextField *hint = [NSTextField labelWithString:@"点击菜单栏 W 或 Dock 图标可开关面板；停止键冲突时点“停止键”重新录制。"];
-  hint.frame = NSMakeRect(20, 224, 420, 18);
+  self.manualConfirmationCheckbox = [NSButton checkboxWithTitle:@"手动确认每一步（可选，默认关闭）"
+                                                         target:self
+                                                         action:@selector(toggleManualConfirmation:)];
+  self.manualConfirmationCheckbox.frame = NSMakeRect(20, 226, 420, 20);
+  self.manualConfirmationCheckbox.state = self.engine.requireManualConfirmation ? NSControlStateValueOn : NSControlStateValueOff;
+  [content addSubview:self.manualConfirmationCheckbox];
+
+  self.confirmButton = [NSButton buttonWithTitle:@"确认下一步" target:self action:@selector(confirmNextAction:)];
+  self.confirmButton.frame = NSMakeRect(20, 194, 140, 28);
+  self.confirmButton.bezelStyle = NSBezelStyleRounded;
+  [content addSubview:self.confirmButton];
+  [self updateConfirmationButton];
+
+  NSTextField *hint = [NSTextField labelWithString:@"安全限制：仅 WoW 前台可操作；切出焦点即停；最多 20 次点击/12 次弹窗/5 分钟。"];
+  hint.frame = NSMakeRect(170, 198, 270, 18);
   hint.font = [NSFont systemFontOfSize:11];
   hint.textColor = [NSColor secondaryLabelColor];
   [content addSubview:hint];
 
-  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 20, 420, 192)];
+  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 20, 420, 160)];
   scroll.hasVerticalScroller = YES;
   scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.borderType = NSBezelBorder;
@@ -199,6 +217,28 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   BOOL enabled = self.engine.stopWhenCreationScreenDisappears;
   self.engine.stopWhenCreationScreenDisappears = !enabled;
   self.successDetectionCheckbox.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
+}
+
+- (void)toggleManualConfirmation:(id)sender {
+  (void)sender;
+  BOOL enabled = self.engine.requireManualConfirmation;
+  self.engine.requireManualConfirmation = !enabled;
+  self.manualConfirmationCheckbox.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
+  [self updateConfirmationButton];
+}
+
+- (void)confirmNextAction:(id)sender {
+  (void)sender;
+  [self.engine confirmNextAction];
+  [self updateConfirmationButton];
+}
+
+- (void)updateConfirmationButton {
+  if (!self.confirmButton) return;
+  BOOL pending = [self.engine hasPendingConfirmation];
+  self.confirmButton.enabled = pending;
+  self.confirmButton.bezelStyle = pending ? NSBezelStyleRounded : NSBezelStyleRounded;
+  self.confirmButton.title = pending ? @"确认下一步" : @"等待检测";
 }
 
 - (void)toggleAutomation:(id)sender {
