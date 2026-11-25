@@ -20,6 +20,8 @@
 @property (nonatomic, strong) NSPanel *panelWindow;
 @property (nonatomic, strong) NSButton *panelToggleButton;
 @property (nonatomic, strong) NSTextField *panelStatusLabel;
+@property (nonatomic, strong) NSView *statusPill;
+@property (nonatomic, strong) NSView *statusDot;
 @property (nonatomic, strong) NSTextField *panelScreenLabel;
 @property (nonatomic, strong) NSTextField *panelCountersLabel;
 @property (nonatomic, strong) NSTextView *panelLogView;
@@ -79,6 +81,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     dispatch_async(dispatch_get_main_queue(), ^{
       weakSelf.panelToggleButton.title = running ? @"停止自动化" : @"开启自动化";
       weakSelf.panelStatusLabel.stringValue = [NSString stringWithFormat:@"状态：%@", status];
+      [weakSelf updateStatusDot:running status:status];
       [weakSelf updateStatusIconRunning:running];
       weakSelf.stepButton.enabled = running && weakSelf.engine.singleStep;
       if (![status isEqualToString:weakSelf.lastStatus]) {
@@ -118,6 +121,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     }];
 
   [self showPanelActivating:NO];
+  [self appendLog:[NSString stringWithFormat:@"WoWCreate %@ 已就绪", self.currentVersion ?: @"?"]];
 }
 
 - (void)updateStatusIconRunning:(BOOL)running {
@@ -127,6 +131,16 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   self.statusItem.button.image = image;
   self.statusItem.button.imagePosition = NSImageOnly;
   self.statusItem.button.toolTip = running ? @"WoWCreate - 自动化运行中" : @"WoWCreate - 点击打开控制面板";
+}
+
+- (void)updateStatusDot:(BOOL)running status:(NSString *)status {
+  NSColor *color = [NSColor colorWithWhite:0.55 alpha:1.0];
+  if (running) {
+    color = [NSColor systemGreenColor];
+  } else if ([status containsString:@"等待"] || [status containsString:@"暂停"]) {
+    color = [NSColor systemOrangeColor];
+  }
+  self.statusDot.layer.backgroundColor = color.CGColor;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -188,21 +202,33 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   quitButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:quitButton];
 
+  self.statusPill = [[NSView alloc] initWithFrame:NSMakeRect(20, 452, width - 40, 28)];
+  self.statusPill.wantsLayer = YES;
+  self.statusPill.layer.cornerRadius = 7;
+  self.statusPill.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.10].CGColor;
+  [content addSubview:self.statusPill];
+
+  self.statusDot = [[NSView alloc] initWithFrame:NSMakeRect(12, 10, 8, 8)];
+  self.statusDot.wantsLayer = YES;
+  self.statusDot.layer.cornerRadius = 4;
+  [self.statusPill addSubview:self.statusDot];
+
   self.panelStatusLabel = [NSTextField labelWithString:@"状态：已停止"];
-  self.panelStatusLabel.frame = NSMakeRect(20, 458, width - 40, 20);
+  self.panelStatusLabel.frame = NSMakeRect(28, 4, width - 40 - 36, 20);
   self.panelStatusLabel.font = [NSFont boldSystemFontOfSize:13];
-  self.panelStatusLabel.textColor = [NSColor colorWithWhite:0.97 alpha:1.0];
+  self.panelStatusLabel.textColor = [NSColor colorWithWhite:1.0 alpha:1.0];
   self.panelStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  [content addSubview:self.panelStatusLabel];
+  [self.statusPill addSubview:self.panelStatusLabel];
+  [self updateStatusDot:NO status:@"已停止"];
 
   self.panelScreenLabel = [NSTextField labelWithString:@"识别：等待启动"];
-  self.panelScreenLabel.frame = NSMakeRect(20, 434, 210, 20);
+  self.panelScreenLabel.frame = NSMakeRect(20, 430, 210, 20);
   self.panelScreenLabel.font = [NSFont systemFontOfSize:12];
   self.panelScreenLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
   [content addSubview:self.panelScreenLabel];
 
   self.panelCountersLabel = [NSTextField labelWithString:@"第 0 轮 · 失败 0 · 操作 0"];
-  self.panelCountersLabel.frame = NSMakeRect(230, 434, width - 250, 20);
+  self.panelCountersLabel.frame = NSMakeRect(230, 430, width - 250, 20);
   self.panelCountersLabel.alignment = NSTextAlignmentRight;
   self.panelCountersLabel.font = [NSFont systemFontOfSize:12];
   self.panelCountersLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
@@ -261,6 +287,14 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   logView.textColor = [NSColor colorWithWhite:0.92 alpha:1.0];
   logView.backgroundColor = [NSColor colorWithWhite:0.10 alpha:1.0];
   logView.drawsBackground = YES;
+  logView.typingAttributes = @{
+    NSForegroundColorAttributeName: [NSColor colorWithWhite:0.92 alpha:1.0],
+    NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
+  };
+  logView.selectedTextAttributes = @{
+    NSBackgroundColorAttributeName: [NSColor selectedTextBackgroundColor],
+    NSForegroundColorAttributeName: [NSColor whiteColor]
+  };
   logView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.documentView = logView;
   [content addSubview:scroll];
@@ -536,7 +570,12 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
                                                   dateStyle:NSDateFormatterNoStyle
                                                   timeStyle:NSDateFormatterMediumStyle],
                     message];
-  [self.panelLogView.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:line]];
+  NSDictionary *attributes = @{
+    NSForegroundColorAttributeName: [NSColor colorWithWhite:0.92 alpha:1.0],
+    NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
+  };
+  [self.panelLogView.textStorage
+    appendAttributedString:[[NSAttributedString alloc] initWithString:line attributes:attributes]];
   [self.panelLogView scrollToEndOfDocument:nil];
 }
 

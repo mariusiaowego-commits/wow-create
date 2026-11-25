@@ -39,7 +39,7 @@ cat > "$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleIdentifier</key><string>local.wowcreate.app</string>
   <key>CFBundleName</key><string>WoWCreate</string>
   <key>CFBundleDisplayName</key><string>WoWCreate</string>
-  <key>CFBundleShortVersionString</key><string>0.2.1</string>
+  <key>CFBundleShortVersionString</key><string>0.2.2</string>
   <key>CFBundleVersion</key><string>${GIT_SHORT}</string>
   <key>WoWCreateBuildTime</key><string>${BUILD_TIME}</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
