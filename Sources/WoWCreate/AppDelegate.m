@@ -86,8 +86,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   };
   [self.hotKey start];
 
-  [NSApp activateIgnoringOtherApps:YES];
-  [self showPanel];
+  [self showPanelActivating:NO];
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
@@ -230,19 +229,28 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 }
 
 - (void)showPanel {
+  [self showPanelActivating:YES];
+}
+
+- (void)showPanelActivating:(BOOL)activating {
   [self buildPanelIfNeeded];
   self.engine.panelOpen = YES;
   [self anchorPanelToStatusItem];
   if (self.engine.isRunning) {
     [self.panelWindow orderFrontRegardless];
-  } else {
+  } else if (activating) {
     [self.panelWindow makeKeyAndOrderFront:nil];
     [NSApp activateIgnoringOtherApps:YES];
+  } else {
+    [self.panelWindow orderFrontRegardless];
   }
   __weak AppDelegate *weakSelf = self;
-  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.35 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-    [weakSelf anchorPanelToStatusItem];
-  });
+  for (NSNumber *delay in @[@0.3, @0.8, @1.5, @2.5]) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+      [weakSelf anchorPanelToStatusItem];
+    });
+  }
 }
 
 - (void)appendLog:(NSString *)message {
