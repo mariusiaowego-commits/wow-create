@@ -1,26 +1,50 @@
 #import "AppDelegate.h"
-#import "AutomationEngine.h"
+#import "FlowEngine.h"
 #import "HotKeyMonitor.h"
 #import <AppKit/AppKit.h>
 #import <Carbon/Carbon.h>
+#import <QuartzCore/QuartzCore.h>
+
+@interface WoWPanel : NSPanel
+@end
+
+@implementation WoWPanel
+- (BOOL)canBecomeKeyWindow { return YES; }
+- (BOOL)canBecomeMainWindow { return NO; }
+@end
 
 @interface AppDelegate ()
 @property (nonatomic, strong) NSStatusItem *statusItem;
-@property (nonatomic, strong) AutomationEngine *engine;
+@property (nonatomic, strong) FlowEngine *engine;
 @property (nonatomic, strong) HotKeyMonitor *hotKey;
-@property (nonatomic, strong) NSWindow *panelWindow;
+@property (nonatomic, strong) NSPanel *panelWindow;
 @property (nonatomic, strong) NSButton *panelToggleButton;
 @property (nonatomic, strong) NSTextField *panelStatusLabel;
+@property (nonatomic, strong) NSView *statusPill;
+@property (nonatomic, strong) NSView *statusDot;
+@property (nonatomic, strong) NSTextField *panelScreenLabel;
+@property (nonatomic, strong) NSTextField *panelCountersLabel;
 @property (nonatomic, strong) NSTextView *panelLogView;
-@property (nonatomic, strong) NSButton *successDetectionCheckbox;
-@property (nonatomic, strong) NSButton *manualConfirmationCheckbox;
-@property (nonatomic, strong) NSButton *confirmButton;
+@property (nonatomic, strong) NSButton *dryRunCheckbox;
+@property (nonatomic, strong) NSButton *singleStepCheckbox;
+@property (nonatomic, strong) NSButton *stepButton;
+@property (nonatomic, strong) NSTextField *mainNameField;
+@property (nonatomic, strong) NSTextField *secondaryNameField;
 @property (nonatomic, strong) NSButton *hotKeyButton;
+@property (nonatomic, strong) NSTextField *versionLabel;
+@property (nonatomic, copy) NSString *currentVersion;
 @property (nonatomic, strong) NSWindow *hotKeyRecordWindow;
 @property (nonatomic, strong) NSTextField *hotKeyRecordLabel;
 @property (nonatomic, strong) id localKeyMonitor;
 @property (nonatomic, strong) id globalKeyMonitor;
+@property (nonatomic, strong) id panelDismissMonitor;
+@property (nonatomic, strong) id appActivationObserver;
 @property (nonatomic, copy, nullable) NSString *lastStatus;
+@property (nonatomic, assign) BOOL pendingShowActivating;
+@property (nonatomic, assign) NSInteger pendingShowAttempts;
+@property (nonatomic, assign) BOOL anchorToClickPoint;
+@property (nonatomic, assign) BOOL panelHasCustomOrigin;
+@property (nonatomic, assign) BOOL anchoringPanel;
 @end
 
 static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
@@ -40,32 +64,38 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
   self.statusItem = [[NSStatusBar systemStatusBar] statusItemWithLength:NSVariableStatusItemLength];
-  self.statusItem.button.title = @"W";
   self.statusItem.button.toolTip = @"WoWCreate - 点击打开控制面板";
   self.statusItem.button.target = self;
-  self.statusItem.button.action = @selector(showPanel);
+  self.statusItem.button.action = @selector(togglePanel);
+  [self updateStatusIconRunning:NO];
 
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  UInt32 keyCode = (UInt32)[defaults integerForKey:@"StopHotKeyKeyCode"];
+  UInt32 keyCode = (UInt32)[defaults integerForKey:@"StopHotKeyV2KeyCode"];
   if (keyCode == 0) keyCode = kVK_ANSI_K;
-  UInt32 modifiers = (UInt32)[defaults integerForKey:@"StopHotKeyModifiers"];
-  if (modifiers == 0) modifiers = controlKey | optionKey | cmdKey;
+  UInt32 modifiers = (UInt32)[defaults integerForKey:@"StopHotKeyV2Modifiers"];
+  if (modifiers == 0) modifiers = controlKey | optionKey | cmdKey | shiftKey;
 
-  self.engine = [[AutomationEngine alloc] init];
-  self.engine.stopWhenCreationScreenDisappears = YES;
-  self.engine.requireManualConfirmation = NO;
-  self.engine.stopWhenFocusLeaves = YES;
+  self.engine = [[FlowEngine alloc] init];
   __weak AppDelegate *weakSelf = self;
   self.engine.onStateChange = ^(BOOL running, NSString *status) {
     dispatch_async(dispatch_get_main_queue(), ^{
       weakSelf.panelToggleButton.title = running ? @"停止自动化" : @"开启自动化";
       weakSelf.panelStatusLabel.stringValue = [NSString stringWithFormat:@"状态：%@", status];
-      weakSelf.statusItem.button.title = running ? @"W●" : @"W";
+      [weakSelf updateStatusDot:running status:status];
+      [weakSelf updateStatusIconRunning:running];
+      weakSelf.stepButton.enabled = running && weakSelf.engine.singleStep;
       if (![status isEqualToString:weakSelf.lastStatus]) {
         weakSelf.lastStatus = status;
         [weakSelf appendLog:status];
       }
-      [weakSelf updateConfirmationButton];
+    });
+  };
+  self.engine.onFlowUpdate = ^(NSString *screenName, NSInteger cycle, NSInteger failures, NSInteger actions) {
+    dispatch_async(dispatch_get_main_queue(), ^{
+      weakSelf.panelScreenLabel.stringValue = [NSString stringWithFormat:@"识别：%@", screenName];
+      weakSelf.panelCountersLabel.stringValue =
+        [NSString stringWithFormat:@"第 %ld 轮 · 失败 %ld · 操作 %ld",
+                                   (long)cycle, (long)failures, (long)actions];
     });
   };
 
@@ -77,11 +107,48 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   };
   [self.hotKey start];
 
-  [self showPanel];
+  self.currentVersion = [self versionStringFromInfo:NSBundle.mainBundle.infoDictionary];
+  self.appActivationObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+    addObserverForName:NSWorkspaceDidActivateApplicationNotification
+    object:nil
+    queue:NSOperationQueue.mainQueue
+    usingBlock:^(NSNotification *note) {
+      NSRunningApplication *app = note.userInfo[NSWorkspaceApplicationKey];
+      if (app.bundleIdentifier && ![app.bundleIdentifier isEqualToString:NSBundle.mainBundle.bundleIdentifier] &&
+          weakSelf.panelWindow.isVisible && !weakSelf.engine.isRunning) {
+        [weakSelf hidePanel];
+      }
+    }];
+
+  [self showPanelActivating:NO];
+  [self appendLog:[NSString stringWithFormat:@"WoWCreate %@ 已就绪", self.currentVersion ?: @"?"]];
+}
+
+- (void)updateStatusIconRunning:(BOOL)running {
+  NSImage *image = [NSImage imageWithSystemSymbolName:(running ? @"w.circle.fill" : @"w.circle")
+                             accessibilityDescription:@"WoWCreate"];
+  image.template = YES;
+  self.statusItem.button.image = image;
+  self.statusItem.button.imagePosition = NSImageOnly;
+  self.statusItem.button.toolTip = running ? @"WoWCreate - 自动化运行中" : @"WoWCreate - 点击打开控制面板";
+}
+
+- (void)updateStatusDot:(BOOL)running status:(NSString *)status {
+  NSColor *color = [NSColor colorWithWhite:0.55 alpha:1.0];
+  if (running) {
+    color = [NSColor systemGreenColor];
+  } else if ([status containsString:@"等待"] || [status containsString:@"暂停"]) {
+    color = [NSColor systemOrangeColor];
+  }
+  self.statusDot.layer.backgroundColor = color.CGColor;
 }
 
 - (void)applicationWillTerminate:(NSNotification *)notification {
   (void)notification;
+  if (self.appActivationObserver) {
+    [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self.appActivationObserver];
+  }
+  [self removePanelDismissMonitor];
   [self.engine stop];
 }
 
@@ -95,66 +162,120 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 - (void)buildPanelIfNeeded {
   if (self.panelWindow) return;
 
-  NSWindow *panel = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 460, 390)
-                                                 styleMask:NSWindowStyleMaskTitled |
-                                                           NSWindowStyleMaskClosable |
-                                                           NSWindowStyleMaskMiniaturizable
-                                                   backing:NSBackingStoreBuffered
-                                                     defer:NO];
-  panel.title = @"WoWCreate";
-  panel.minSize = NSMakeSize(420, 300);
+  WoWPanel *panel = [[WoWPanel alloc] initWithContentRect:NSMakeRect(0, 0, 480, 534)
+                                                styleMask:NSWindowStyleMaskBorderless |
+                                                          NSWindowStyleMaskNonactivatingPanel
+                                                  backing:NSBackingStoreBuffered
+                                                    defer:NO];
+  panel.opaque = NO;
+  panel.backgroundColor = NSColor.clearColor;
+  panel.hasShadow = YES;
   panel.delegate = self;
+  panel.appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+  panel.movableByWindowBackground = YES;
+  panel.becomesKeyOnlyIfNeeded = YES;
+  panel.floatingPanel = YES;
+  panel.hidesOnDeactivate = NO;
 
   NSView *content = panel.contentView;
+  content.wantsLayer = YES;
+  content.layer.cornerRadius = 12;
+  content.layer.masksToBounds = YES;
+  content.layer.backgroundColor = [NSColor colorWithWhite:0.14 alpha:1.0].CGColor;
+  content.layer.borderWidth = 1;
+  content.layer.borderColor = [NSColor colorWithWhite:0.30 alpha:1.0].CGColor;
+  CGFloat width = 480;
 
   self.panelToggleButton = [NSButton buttonWithTitle:@"开启自动化" target:self action:@selector(toggleAutomation:)];
-  self.panelToggleButton.frame = NSMakeRect(20, 302, 140, 30);
+  self.panelToggleButton.frame = NSMakeRect(20, 486, 140, 32);
   self.panelToggleButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.panelToggleButton];
 
   self.hotKeyButton = [NSButton buttonWithTitle:@"停止键" target:self action:@selector(changeStopHotKey:)];
-  self.hotKeyButton.frame = NSMakeRect(170, 302, 190, 30);
+  self.hotKeyButton.frame = NSMakeRect(168, 486, 192, 32);
   self.hotKeyButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:self.hotKeyButton];
   [self updateHotKeyButton];
 
   NSButton *quitButton = [NSButton buttonWithTitle:@"退出" target:self action:@selector(quitApp:)];
-  quitButton.frame = NSMakeRect(370, 302, 70, 30);
+  quitButton.frame = NSMakeRect(width - 80, 486, 60, 32);
   quitButton.bezelStyle = NSBezelStyleRounded;
   [content addSubview:quitButton];
 
+  self.statusPill = [[NSView alloc] initWithFrame:NSMakeRect(20, 452, width - 40, 28)];
+  self.statusPill.wantsLayer = YES;
+  self.statusPill.layer.cornerRadius = 7;
+  self.statusPill.layer.backgroundColor = [NSColor colorWithWhite:1.0 alpha:0.10].CGColor;
+  [content addSubview:self.statusPill];
+
+  self.statusDot = [[NSView alloc] initWithFrame:NSMakeRect(12, 10, 8, 8)];
+  self.statusDot.wantsLayer = YES;
+  self.statusDot.layer.cornerRadius = 4;
+  [self.statusPill addSubview:self.statusDot];
+
   self.panelStatusLabel = [NSTextField labelWithString:@"状态：已停止"];
-  self.panelStatusLabel.frame = NSMakeRect(20, 274, 420, 20);
+  self.panelStatusLabel.frame = NSMakeRect(28, 4, width - 40 - 36, 20);
+  self.panelStatusLabel.font = [NSFont boldSystemFontOfSize:13];
+  self.panelStatusLabel.textColor = [NSColor colorWithWhite:1.0 alpha:1.0];
   self.panelStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
-  [content addSubview:self.panelStatusLabel];
+  [self.statusPill addSubview:self.panelStatusLabel];
+  [self updateStatusDot:NO status:@"已停止"];
 
-  self.successDetectionCheckbox = [NSButton checkboxWithTitle:@"创建界面消失即停止（保守）"
-                                                       target:self
-                                                       action:@selector(toggleSuccessDetection:)];
-  self.successDetectionCheckbox.frame = NSMakeRect(20, 250, 420, 20);
-  self.successDetectionCheckbox.state = self.engine.stopWhenCreationScreenDisappears ? NSControlStateValueOn : NSControlStateValueOff;
-  [content addSubview:self.successDetectionCheckbox];
+  self.panelScreenLabel = [NSTextField labelWithString:@"识别：等待启动"];
+  self.panelScreenLabel.frame = NSMakeRect(20, 430, 210, 20);
+  self.panelScreenLabel.font = [NSFont systemFontOfSize:12];
+  self.panelScreenLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
+  [content addSubview:self.panelScreenLabel];
 
-  self.manualConfirmationCheckbox = [NSButton checkboxWithTitle:@"手动确认每一步（可选，默认关闭）"
-                                                         target:self
-                                                         action:@selector(toggleManualConfirmation:)];
-  self.manualConfirmationCheckbox.frame = NSMakeRect(20, 226, 420, 20);
-  self.manualConfirmationCheckbox.state = self.engine.requireManualConfirmation ? NSControlStateValueOn : NSControlStateValueOff;
-  [content addSubview:self.manualConfirmationCheckbox];
+  self.panelCountersLabel = [NSTextField labelWithString:@"第 0 轮 · 失败 0 · 操作 0"];
+  self.panelCountersLabel.frame = NSMakeRect(230, 430, width - 250, 20);
+  self.panelCountersLabel.alignment = NSTextAlignmentRight;
+  self.panelCountersLabel.font = [NSFont systemFontOfSize:12];
+  self.panelCountersLabel.textColor = [NSColor colorWithWhite:0.76 alpha:1.0];
+  [content addSubview:self.panelCountersLabel];
 
-  self.confirmButton = [NSButton buttonWithTitle:@"确认下一步" target:self action:@selector(confirmNextAction:)];
-  self.confirmButton.frame = NSMakeRect(20, 194, 140, 28);
-  self.confirmButton.bezelStyle = NSBezelStyleRounded;
-  [content addSubview:self.confirmButton];
-  [self updateConfirmationButton];
+  NSTextField *mainLabel = [NSTextField labelWithString:@"主名"];
+  mainLabel.frame = NSMakeRect(20, 405, 34, 18);
+  [content addSubview:mainLabel];
+  self.mainNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(56, 400, 120, 24)];
+  self.mainNameField.stringValue = [NSUserDefaults.standardUserDefaults stringForKey:@"MainName"] ?: @"ask";
+  self.mainNameField.placeholderString = @"ask";
+  [content addSubview:self.mainNameField];
 
-  NSTextField *hint = [NSTextField labelWithString:@"安全限制：仅 WoW 前台可操作；切出焦点即停；最多 20 次点击/12 次弹窗/5 分钟。"];
-  hint.frame = NSMakeRect(170, 198, 270, 18);
+  NSTextField *secondaryLabel = [NSTextField labelWithString:@"副名"];
+  secondaryLabel.frame = NSMakeRect(196, 405, 34, 18);
+  [content addSubview:secondaryLabel];
+  self.secondaryNameField = [[NSTextField alloc] initWithFrame:NSMakeRect(232, 400, 180, 24)];
+  self.secondaryNameField.stringValue = [NSUserDefaults.standardUserDefaults stringForKey:@"SecondaryName"] ?: @"timemachine";
+  self.secondaryNameField.placeholderString = @"timemachine";
+  [content addSubview:self.secondaryNameField];
+
+  self.dryRunCheckbox = [NSButton checkboxWithTitle:@"演练（不点击）" target:self action:@selector(toggleDryRun:)];
+  self.dryRunCheckbox.frame = NSMakeRect(20, 370, 130, 20);
+  self.dryRunCheckbox.state = NSControlStateValueOff;
+  [content addSubview:self.dryRunCheckbox];
+
+  self.singleStepCheckbox = [NSButton checkboxWithTitle:@"单步模式" target:self action:@selector(toggleSingleStep:)];
+  self.singleStepCheckbox.frame = NSMakeRect(154, 370, 100, 20);
+  self.singleStepCheckbox.state = NSControlStateValueOff;
+  [content addSubview:self.singleStepCheckbox];
+
+  self.stepButton = [NSButton buttonWithTitle:@"执行一步" target:self action:@selector(stepOnce:)];
+  self.stepButton.frame = NSMakeRect(width - 140, 364, 120, 28);
+  self.stepButton.bezelStyle = NSBezelStyleRounded;
+  self.stepButton.enabled = NO;
+  [content addSubview:self.stepButton];
+
+  NSTextField *hint = [NSTextField labelWithString:
+    @"运行中面板常驻且不抢焦点；拖动面板空白处可调位置。默认停止键 ⌃⌥⌘⇧K，可在上方重录。\n上限：30 轮 / 40 次失败 / 30 分钟；不会读取或保存账号密码。"];
+  hint.frame = NSMakeRect(20, 322, width - 40, 36);
   hint.font = [NSFont systemFontOfSize:11];
-  hint.textColor = [NSColor secondaryLabelColor];
+  hint.textColor = [NSColor colorWithWhite:0.68 alpha:1.0];
+  hint.lineBreakMode = NSLineBreakByWordWrapping;
+  hint.maximumNumberOfLines = 2;
   [content addSubview:hint];
 
-  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 20, 420, 160)];
+  NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 54, width - 40, 234)];
   scroll.hasVerticalScroller = YES;
   scroll.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.borderType = NSBezelBorder;
@@ -163,42 +284,283 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   logView.editable = NO;
   logView.selectable = YES;
   logView.font = [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular];
+  logView.textColor = [NSColor colorWithWhite:0.92 alpha:1.0];
+  logView.backgroundColor = [NSColor colorWithWhite:0.10 alpha:1.0];
+  logView.drawsBackground = YES;
+  logView.typingAttributes = @{
+    NSForegroundColorAttributeName: [NSColor colorWithWhite:0.92 alpha:1.0],
+    NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
+  };
+  logView.selectedTextAttributes = @{
+    NSBackgroundColorAttributeName: [NSColor selectedTextBackgroundColor],
+    NSForegroundColorAttributeName: [NSColor whiteColor]
+  };
   logView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
   scroll.documentView = logView;
   [content addSubview:scroll];
 
   self.panelLogView = logView;
+  self.versionLabel = [NSTextField labelWithString:@"版本：读取中…"];
+  self.versionLabel.frame = NSMakeRect(20, 8, width - 40, 40);
+  self.versionLabel.font = [NSFont monospacedSystemFontOfSize:10 weight:NSFontWeightRegular];
+  self.versionLabel.textColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+  self.versionLabel.maximumNumberOfLines = 3;
+  self.versionLabel.lineBreakMode = NSLineBreakByWordWrapping;
+  [content addSubview:self.versionLabel];
   self.panelWindow = panel;
+  if ([NSUserDefaults.standardUserDefaults stringForKey:@"PanelCustomFrame"].length) {
+    self.panelHasCustomOrigin = YES;
+  }
 }
 
-- (void)anchorPanelToStatusItem {
-  NSWindow *statusWindow = self.statusItem.button.window;
-  if (!statusWindow) return;
-
-  NSRect statusFrame = statusWindow.frame;
+- (BOOL)anchorPanelToStatusItem {
   NSRect panelFrame = self.panelWindow.frame;
-  CGFloat x = NSMidX(statusFrame) - NSWidth(panelFrame) / 2;
-  CGFloat y = NSMinY(statusFrame) - NSHeight(panelFrame) - 4;
-  NSRect screenFrame = (statusWindow.screen ?: NSScreen.mainScreen).visibleFrame;
+  if (self.panelHasCustomOrigin) {
+    NSRect saved = NSRectFromString(
+      [NSUserDefaults.standardUserDefaults stringForKey:@"PanelCustomFrame"]);
+    if (!NSIsEmptyRect(saved)) {
+      NSScreen *host = NSScreen.mainScreen;
+      CGFloat best = -1;
+      for (NSScreen *candidate in NSScreen.screens) {
+        NSRect overlap = NSIntersectionRect(saved, candidate.visibleFrame);
+        CGFloat area = NSWidth(overlap) * NSHeight(overlap);
+        if (area > best) {
+          best = area;
+          host = candidate;
+        }
+      }
+      NSRect vf = host.visibleFrame;
+      CGFloat x = MIN(MAX(NSMinX(saved), NSMinX(vf)), NSMaxX(vf) - NSWidth(saved));
+      CGFloat y = MIN(MAX(NSMinY(saved), NSMinY(vf)), NSMaxY(vf) - NSHeight(saved));
+      self.anchoringPanel = YES;
+      [self.panelWindow setFrameOrigin:NSMakePoint(x, y)];
+      self.anchoringPanel = NO;
+      return YES;
+    }
+  }
+  NSPoint anchorPoint = NSZeroPoint;
+  NSScreen *screen = nil;
+  if (self.anchorToClickPoint) {
+    anchorPoint = NSEvent.mouseLocation;
+    for (NSScreen *candidate in NSScreen.screens) {
+      if (NSPointInRect(anchorPoint, candidate.frame) &&
+          anchorPoint.y > NSMaxY(candidate.visibleFrame)) {
+        screen = candidate;
+        break;
+      }
+    }
+    if (!screen) anchorPoint = NSZeroPoint;
+  }
+  if (!screen) {
+    NSWindow *statusWindow = self.statusItem.button.window;
+    if (!statusWindow) return NO;
+    NSRect buttonRect = [self.statusItem.button convertRect:self.statusItem.button.bounds toView:nil];
+    NSRect statusFrame = [statusWindow convertRectToScreen:buttonRect];
+    NSPoint statusMid = NSMakePoint(NSMidX(statusFrame), NSMidY(statusFrame));
+    NSScreen *statusScreen = nil;
+    for (NSScreen *candidate in NSScreen.screens) {
+      if (NSPointInRect(statusMid, candidate.frame) &&
+          NSMinY(statusFrame) >= NSMaxY(candidate.visibleFrame) - 1) {
+        statusScreen = candidate;
+        break;
+      }
+    }
+    if (!statusScreen) return NO;
+    screen = statusScreen;
+    NSPoint mouse = NSEvent.mouseLocation;
+    for (NSScreen *candidate in NSScreen.screens) {
+      if (NSPointInRect(mouse, candidate.frame)) {
+        screen = candidate;
+        break;
+      }
+    }
+    CGFloat localX = NSMidX(statusFrame) - NSMinX(statusScreen.frame);
+    anchorPoint = NSMakePoint(NSMinX(screen.frame) + localX, NSMinY(statusFrame));
+  }
+
+  NSRect screenFrame = screen.visibleFrame;
+  CGFloat x = anchorPoint.x - NSWidth(panelFrame) / 2;
+  CGFloat y = NSMaxY(screenFrame) - NSHeight(panelFrame) - 4;
   x = MAX(NSMinX(screenFrame), MIN(x, NSMaxX(screenFrame) - NSWidth(panelFrame)));
-  y = MAX(NSMinY(screenFrame), MIN(y, NSMaxY(screenFrame) - NSHeight(panelFrame)));
+  y = MAX(NSMinY(screenFrame), y);
+  self.anchoringPanel = YES;
   [self.panelWindow setFrameOrigin:NSMakePoint(x, y)];
+  self.anchoringPanel = NO;
+  return YES;
+}
+
+- (void)windowDidMove:(NSNotification *)notification {
+  if (notification.object != self.panelWindow || self.anchoringPanel) return;
+  if (!self.panelWindow.isVisible) return;
+  if ((NSEvent.pressedMouseButtons & 1) == 0) return;
+  self.panelHasCustomOrigin = YES;
+  [NSUserDefaults.standardUserDefaults setObject:NSStringFromRect(self.panelWindow.frame)
+                                          forKey:@"PanelCustomFrame"];
+}
+
+- (NSRect)statusItemScreenRect {
+  NSWindow *statusWindow = self.statusItem.button.window;
+  if (!statusWindow) return NSZeroRect;
+  NSRect buttonRect = [self.statusItem.button convertRect:self.statusItem.button.bounds toView:nil];
+  return [statusWindow convertRectToScreen:buttonRect];
+}
+
+- (void)togglePanel {
+  if (self.panelWindow.isVisible) {
+    [self hidePanel];
+  } else {
+    self.anchorToClickPoint = YES;
+    [self showPanel];
+    self.anchorToClickPoint = NO;
+  }
 }
 
 - (void)showPanel {
+  [self showPanelActivating:YES];
+}
+
+- (void)showPanelActivating:(BOOL)activating {
   [self buildPanelIfNeeded];
-  [self anchorPanelToStatusItem];
-  [self.panelWindow makeKeyAndOrderFront:nil];
-  SEL activateSelector = @selector(activateWithOptions:);
-  if ([NSApp respondsToSelector:activateSelector]) {
-    NSMethodSignature *signature = [NSApp methodSignatureForSelector:activateSelector];
-    NSInvocation *invocation = [NSInvocation invocationWithMethodSignature:signature];
-    invocation.target = NSApp;
-    invocation.selector = activateSelector;
-    NSUInteger options = 1 << 1;
-    [invocation setArgument:&options atIndex:2];
-    [invocation invoke];
+  self.engine.panelOpen = YES;
+  [self refreshVersionInfo];
+  if (![self anchorPanelToStatusItem]) {
+    [self.panelWindow orderOut:nil];
+    self.pendingShowActivating = activating;
+    self.pendingShowAttempts = 0;
+    [self schedulePendingShow];
+    return;
   }
+  self.pendingShowAttempts = 0;
+  if (self.engine.isRunning) {
+    [self.panelWindow orderFrontRegardless];
+  } else if (activating) {
+    [self.panelWindow makeKeyAndOrderFront:nil];
+    [NSApp activateIgnoringOtherApps:YES];
+  } else {
+    [self.panelWindow orderFrontRegardless];
+  }
+  [self installPanelDismissMonitor];
+  [self scheduleReanchor];
+}
+
+- (void)schedulePendingShow {
+  if (self.pendingShowAttempts >= 40) return;
+  self.pendingShowAttempts += 1;
+  __weak AppDelegate *weakSelf = self;
+  dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)),
+                 dispatch_get_main_queue(), ^{
+    AppDelegate *strongSelf = weakSelf;
+    if (!strongSelf || !strongSelf.pendingShowAttempts) return;
+    if ([strongSelf anchorPanelToStatusItem]) {
+      BOOL activating = strongSelf.pendingShowActivating;
+      strongSelf.pendingShowAttempts = 0;
+      if (strongSelf.engine.isRunning || !activating) {
+        [strongSelf.panelWindow orderFrontRegardless];
+      } else {
+        [strongSelf.panelWindow makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+      }
+      [strongSelf installPanelDismissMonitor];
+      [strongSelf scheduleReanchor];
+    } else {
+      [strongSelf schedulePendingShow];
+    }
+  });
+}
+
+- (void)scheduleReanchor {
+  __weak AppDelegate *weakSelf = self;
+  for (NSNumber *delay in @[@0.2, @0.6, @1.2]) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delay.doubleValue * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+      AppDelegate *strongSelf = weakSelf;
+      if (!strongSelf || !strongSelf.panelWindow.isVisible) return;
+      [strongSelf anchorPanelToStatusItem];
+    });
+  }
+}
+
+- (void)hidePanel {
+  self.pendingShowAttempts = 0;
+  [self removePanelDismissMonitor];
+  [self.panelWindow orderOut:nil];
+  self.engine.panelOpen = NO;
+  if (self.engine.isRunning && NSApp.isActive) {
+    [self activateTargetApplication];
+  }
+}
+
+- (void)installPanelDismissMonitor {
+  if (self.panelDismissMonitor) return;
+  __weak AppDelegate *weakSelf = self;
+  self.panelDismissMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown |
+                                                                          NSEventMaskRightMouseDown
+                                                                   handler:^(NSEvent *event) {
+    (void)event;
+    dispatch_async(dispatch_get_main_queue(), ^{
+      AppDelegate *strongSelf = weakSelf;
+      if (!strongSelf || !strongSelf.panelWindow.isVisible) return;
+      if (strongSelf.engine.isRunning) return;
+      NSPoint mouse = NSEvent.mouseLocation;
+      if (NSPointInRect(mouse, strongSelf.panelWindow.frame)) return;
+      NSRect statusRect = [strongSelf statusItemScreenRect];
+      if (!NSIsEmptyRect(statusRect) && NSPointInRect(mouse, statusRect)) return;
+      [strongSelf hidePanel];
+    });
+  }];
+}
+
+- (void)removePanelDismissMonitor {
+  if (!self.panelDismissMonitor) return;
+  [NSEvent removeMonitor:self.panelDismissMonitor];
+  self.panelDismissMonitor = nil;
+}
+
+- (void)windowDidResignKey:(NSNotification *)notification {
+  if (notification.object != self.panelWindow) return;
+  if (self.hotKeyRecordWindow && self.hotKeyRecordWindow.isVisible) return;
+  if (self.engine.isRunning) return;
+  NSRect statusRect = [self statusItemScreenRect];
+  if (!NSIsEmptyRect(statusRect) && NSPointInRect(NSEvent.mouseLocation, statusRect)) return;
+  [self hidePanel];
+}
+
+- (NSString *)versionStringFromInfo:(NSDictionary *)info {
+  NSString *version = info[@"CFBundleShortVersionString"] ?: @"?";
+  NSString *build = info[@"CFBundleVersion"] ?: @"?";
+  NSString *time = info[@"WoWCreateBuildTime"] ?: @"?";
+  return [NSString stringWithFormat:@"v%@ · %@ · %@", version, build, time];
+}
+
+- (void)refreshVersionInfo {
+  if (!self.versionLabel) return;
+  if (!self.currentVersion) {
+    self.currentVersion = [self versionStringFromInfo:NSBundle.mainBundle.infoDictionary];
+  }
+  NSString *plistPath = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Contents/Info.plist"];
+  NSDictionary *diskInfo = [NSDictionary dictionaryWithContentsOfFile:plistPath];
+  NSMutableString *text = [NSMutableString stringWithFormat:@"当前  %@", self.currentVersion];
+  if (!diskInfo) {
+    [text appendString:@"\n磁盘  读取失败（可能正在重建）"];
+    self.versionLabel.textColor = [NSColor systemOrangeColor];
+  } else {
+    NSString *diskVersion = [self versionStringFromInfo:diskInfo];
+    if ([diskVersion isEqualToString:self.currentVersion]) {
+      [text appendFormat:@"\n磁盘  %@  ✓ 已是最新", diskVersion];
+      self.versionLabel.textColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+    } else {
+      [text appendFormat:@"\n磁盘  %@  ⚠ 已更新，重启 App", diskVersion];
+      self.versionLabel.textColor = [NSColor systemOrangeColor];
+    }
+  }
+  BOOL axTrusted = AXIsProcessTrusted();
+  BOOL screenReady = CGPreflightScreenCaptureAccess();
+  [text appendFormat:@"\n权限  辅助功能 %@ · 屏幕录制 %@", axTrusted ? @"✓" : @"✗",
+                     screenReady ? @"✓" : @"✗（授权后需重启 App）"];
+  if (!axTrusted || !screenReady) {
+    self.versionLabel.textColor = [NSColor systemOrangeColor];
+  }
+  self.versionLabel.stringValue = text;
 }
 
 - (void)appendLog:(NSString *)message {
@@ -208,45 +570,81 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
                                                   dateStyle:NSDateFormatterNoStyle
                                                   timeStyle:NSDateFormatterMediumStyle],
                     message];
-  [self.panelLogView.textStorage appendAttributedString:[[NSAttributedString alloc] initWithString:line]];
+  NSDictionary *attributes = @{
+    NSForegroundColorAttributeName: [NSColor colorWithWhite:0.92 alpha:1.0],
+    NSFontAttributeName: [NSFont monospacedSystemFontOfSize:11 weight:NSFontWeightRegular]
+  };
+  [self.panelLogView.textStorage
+    appendAttributedString:[[NSAttributedString alloc] initWithString:line attributes:attributes]];
   [self.panelLogView scrollToEndOfDocument:nil];
 }
 
-- (void)toggleSuccessDetection:(id)sender {
+- (void)toggleDryRun:(id)sender {
   (void)sender;
-  BOOL enabled = self.engine.stopWhenCreationScreenDisappears;
-  self.engine.stopWhenCreationScreenDisappears = !enabled;
-  self.successDetectionCheckbox.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
+  self.engine.dryRun = self.dryRunCheckbox.state == NSControlStateValueOn;
 }
 
-- (void)toggleManualConfirmation:(id)sender {
+- (void)toggleSingleStep:(id)sender {
   (void)sender;
-  BOOL enabled = self.engine.requireManualConfirmation;
-  self.engine.requireManualConfirmation = !enabled;
-  self.manualConfirmationCheckbox.state = enabled ? NSControlStateValueOff : NSControlStateValueOn;
-  [self updateConfirmationButton];
+  self.engine.singleStep = self.singleStepCheckbox.state == NSControlStateValueOn;
+  self.stepButton.enabled = self.engine.isRunning && self.engine.singleStep;
 }
 
-- (void)confirmNextAction:(id)sender {
+- (void)stepOnce:(id)sender {
   (void)sender;
-  [self.engine confirmNextAction];
-  [self updateConfirmationButton];
-}
-
-- (void)updateConfirmationButton {
-  if (!self.confirmButton) return;
-  BOOL pending = [self.engine hasPendingConfirmation];
-  self.confirmButton.enabled = pending;
-  self.confirmButton.bezelStyle = pending ? NSBezelStyleRounded : NSBezelStyleRounded;
-  self.confirmButton.title = pending ? @"确认下一步" : @"等待检测";
+  [self.engine stepOnce];
 }
 
 - (void)toggleAutomation:(id)sender {
   (void)sender;
   if (self.engine.isRunning) {
     [self.engine stop];
-  } else {
-    [self.engine startWithProcessName:@"World of Warcraft"];
+    return;
+  }
+
+  NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
+  [defaults setObject:self.mainNameField.stringValue forKey:@"MainName"];
+  [defaults setObject:self.secondaryNameField.stringValue forKey:@"SecondaryName"];
+  [defaults synchronize];
+
+  self.engine.mainName = self.mainNameField.stringValue;
+  self.engine.secondaryName = self.secondaryNameField.stringValue;
+  self.engine.dryRun = self.dryRunCheckbox.state == NSControlStateValueOn;
+  self.engine.singleStep = self.singleStepCheckbox.state == NSControlStateValueOn;
+  self.stepButton.enabled = self.engine.singleStep;
+
+  if (!AXIsProcessTrusted()) {
+    NSDictionary *options = @{(__bridge id)kAXTrustedCheckOptionPrompt: @YES};
+    AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)options);
+    [self appendLog:@"缺少辅助功能权限，已弹出系统授权提示。勾选 WoWCreate 后再点“开启自动化”"];
+    return;
+  }
+  if (!CGPreflightScreenCaptureAccess()) {
+    CGRequestScreenCaptureAccess();
+    [self appendLog:@"缺少屏幕录制权限，已弹出系统授权提示。授权后请重启 App"];
+    return;
+  }
+
+  [self activateTargetApplication];
+  self.engine.panelOpen = NO;
+  [self.panelWindow orderFrontRegardless];
+  [self.engine startWithProcessName:@"World of Warcraft"];
+}
+
+- (void)activateTargetApplication {
+  for (NSRunningApplication *application in NSWorkspace.sharedWorkspace.runningApplications) {
+    NSString *name = application.localizedName.lowercaseString ?: @"";
+    if ([name containsString:@"world of warcraft"] ||
+        [name containsString:@"魔兽世界"] ||
+        [name isEqualToString:@"wow"]) {
+      [application unhide];
+      if (@available(macOS 14.0, *)) {
+        [application activateFromApplication:NSRunningApplication.currentApplication options:0];
+      } else {
+        [application activateWithOptions:NSApplicationActivateIgnoringOtherApps];
+      }
+      return;
+    }
   }
 }
 
@@ -309,8 +707,8 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   }
 
   NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
-  [defaults setInteger:(NSInteger)keyCode forKey:@"StopHotKeyKeyCode"];
-  [defaults setInteger:(NSInteger)modifiers forKey:@"StopHotKeyModifiers"];
+  [defaults setInteger:(NSInteger)keyCode forKey:@"StopHotKeyV2KeyCode"];
+  [defaults setInteger:(NSInteger)modifiers forKey:@"StopHotKeyV2Modifiers"];
   [defaults synchronize];
   [self.hotKey setKeyCode:keyCode modifiers:modifiers];
   [self updateHotKeyButton];
@@ -348,7 +746,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     [self cancelHotKeyRecording];
     return NO;
   }
-  [window orderOut:nil];
+  [self hidePanel];
   return NO;
 }
 @end

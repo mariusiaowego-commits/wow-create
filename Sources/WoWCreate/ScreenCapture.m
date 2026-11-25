@@ -37,6 +37,7 @@ typedef struct {
   NSUInteger red;
   NSUInteger gray;
   NSUInteger total;
+  double luminance;
 } PixelCounts;
 
 static BOOL StringMatchesTarget(NSString *value, NSString *targetAlias, BOOL allowShortAlias) {
@@ -52,7 +53,7 @@ static BOOL StringMatchesTarget(NSString *value, NSString *targetAlias, BOOL all
 }
 
 - (PixelCounts)countsInRect:(CGRect)rect image:(CGImageRef)image {
-  PixelCounts counts = {0, 0, 0};
+  PixelCounts counts = {0, 0, 0, 0};
   CGRect pixelRect = CGRectMake(
     rect.origin.x * CGImageGetWidth(image),
     rect.origin.y * CGImageGetHeight(image),
@@ -78,13 +79,16 @@ static BOOL StringMatchesTarget(NSString *value, NSString *targetAlias, BOOL all
 
   const unsigned char *bytes = data.bytes;
   counts.total = width * height;
+  unsigned long long luminanceSum = 0;
   for (NSUInteger index = 0; index < counts.total; index++) {
     unsigned char red = bytes[index * 4];
     unsigned char green = bytes[index * 4 + 1];
     unsigned char blue = bytes[index * 4 + 2];
     if (red > 80 && red > green * 2 && red > blue * 2) counts.red++;
     if (abs(red - green) < 12 && abs(green - blue) < 12 && red >= 30 && red <= 90) counts.gray++;
+    luminanceSum += (unsigned long long)(0.299 * red + 0.587 * green + 0.114 * blue);
   }
+  if (counts.total > 0) counts.luminance = (double)luminanceSum / counts.total;
   return counts;
 }
 
@@ -152,5 +156,15 @@ static BOOL StringMatchesTarget(NSString *value, NSString *targetAlias, BOOL all
 - (BOOL)isRect:(CGRect)rect grayDominantInImage:(CGImageRef)image {
   PixelCounts counts = [self countsInRect:rect image:image];
   return counts.gray > counts.total / 2;
+}
+
+- (double)redRatioInRect:(CGRect)rect image:(CGImageRef)image {
+  PixelCounts counts = [self countsInRect:rect image:image];
+  return counts.total > 0 ? (double)counts.red / counts.total : 0.0;
+}
+
+- (double)brightnessInRect:(CGRect)rect image:(CGImageRef)image {
+  PixelCounts counts = [self countsInRect:rect image:image];
+  return counts.luminance;
 }
 @end
