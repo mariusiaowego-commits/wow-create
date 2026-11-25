@@ -41,6 +41,8 @@
 @property (nonatomic, assign) BOOL pendingShowActivating;
 @property (nonatomic, assign) NSInteger pendingShowAttempts;
 @property (nonatomic, assign) BOOL anchorToClickPoint;
+@property (nonatomic, assign) BOOL panelHasCustomOrigin;
+@property (nonatomic, assign) BOOL anchoringPanel;
 @end
 
 static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
@@ -110,7 +112,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     usingBlock:^(NSNotification *note) {
       NSRunningApplication *app = note.userInfo[NSWorkspaceApplicationKey];
       if (app.bundleIdentifier && ![app.bundleIdentifier isEqualToString:NSBundle.mainBundle.bundleIdentifier] &&
-          weakSelf.panelWindow.isVisible) {
+          weakSelf.panelWindow.isVisible && !weakSelf.engine.isRunning) {
         [weakSelf hidePanel];
       }
     }];
@@ -155,6 +157,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   panel.backgroundColor = NSColor.clearColor;
   panel.hasShadow = YES;
   panel.delegate = self;
+  panel.movableByWindowBackground = YES;
   panel.becomesKeyOnlyIfNeeded = YES;
   panel.floatingPanel = YES;
   panel.hidesOnDeactivate = NO;
@@ -235,7 +238,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   [content addSubview:self.stepButton];
 
   NSTextField *hint = [NSTextField labelWithString:
-    @"仅 WoW 前台时操作，切出焦点立即停止。默认停止键 ⌃⌥⌘⇧K，可在上方重录。\n上限：30 轮 / 40 次失败 / 30 分钟；不会读取或保存账号密码。"];
+    @"运行中面板常驻且不抢焦点；拖动面板空白处可调位置。默认停止键 ⌃⌥⌘⇧K，可在上方重录。\n上限：30 轮 / 40 次失败 / 30 分钟；不会读取或保存账号密码。"];
   hint.frame = NSMakeRect(20, 322, width - 40, 36);
   hint.font = [NSFont systemFontOfSize:11];
   hint.textColor = [NSColor secondaryLabelColor];
@@ -269,6 +272,29 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 
 - (BOOL)anchorPanelToStatusItem {
   NSRect panelFrame = self.panelWindow.frame;
+  if (self.panelHasCustomOrigin) {
+    NSRect saved = NSRectFromString(
+      [NSUserDefaults.standardUserDefaults stringForKey:@"PanelCustomFrame"]);
+    if (!NSIsEmptyRect(saved)) {
+      NSScreen *host = NSScreen.mainScreen;
+      CGFloat best = -1;
+      for (NSScreen *candidate in NSScreen.screens) {
+        NSRect overlap = NSIntersectionRect(saved, candidate.visibleFrame);
+        CGFloat area = NSWidth(overlap) * NSHeight(overlap);
+        if (area > best) {
+          best = area;
+          host = candidate;
+        }
+      }
+      NSRect vf = host.visibleFrame;
+      CGFloat x = MIN(MAX(NSMinX(saved), NSMinX(vf)), NSMaxX(vf) - NSWidth(saved));
+      CGFloat y = MIN(MAX(NSMinY(saved), NSMinY(vf)), NSMaxY(vf) - NSHeight(saved));
+      self.anchoringPanel = YES;
+      [self.panelWindow setFrameOrigin:NSMakePoint(x, y)];
+      self.anchoringPanel = NO;
+      return YES;
+    }
+  }
   NSPoint anchorPoint = NSZeroPoint;
   NSScreen *screen = nil;
   if (self.anchorToClickPoint) {
@@ -313,8 +339,18 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
   CGFloat y = NSMaxY(screenFrame) - NSHeight(panelFrame) - 4;
   x = MAX(NSMinX(screenFrame), MIN(x, NSMaxX(screenFrame) - NSWidth(panelFrame)));
   y = MAX(NSMinY(screenFrame), y);
+  self.anchoringPanel = YES;
   [self.panelWindow setFrameOrigin:NSMakePoint(x, y)];
+  self.anchoringPanel = NO;
   return YES;
+}
+
+- (void)windowDidMove:(NSNotification *)notification {
+  if (notification.object != self.panelWindow || self.anchoringPanel) return;
+  if (!self.panelWindow.isVisible) return;
+  self.panelHasCustomOrigin = YES;
+  [NSUserDefaults.standardUserDefaults setObject:NSStringFromRect(self.panelWindow.frame)
+                                          forKey:@"PanelCustomFrame"];
 }
 
 - (NSRect)statusItemScreenRect {
@@ -419,6 +455,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
     dispatch_async(dispatch_get_main_queue(), ^{
       AppDelegate *strongSelf = weakSelf;
       if (!strongSelf || !strongSelf.panelWindow.isVisible) return;
+      if (strongSelf.engine.isRunning) return;
       NSPoint mouse = NSEvent.mouseLocation;
       if (NSPointInRect(mouse, strongSelf.panelWindow.frame)) return;
       NSRect statusRect = [strongSelf statusItemScreenRect];
@@ -437,6 +474,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 - (void)windowDidResignKey:(NSNotification *)notification {
   if (notification.object != self.panelWindow) return;
   if (self.hotKeyRecordWindow && self.hotKeyRecordWindow.isVisible) return;
+  if (self.engine.isRunning) return;
   NSRect statusRect = [self statusItemScreenRect];
   if (!NSIsEmptyRect(statusRect) && NSPointInRect(NSEvent.mouseLocation, statusRect)) return;
   [self hidePanel];
@@ -539,7 +577,7 @@ static UInt32 CarbonModifiersFromEvent(NSEvent *event) {
 
   [self activateTargetApplication];
   self.engine.panelOpen = NO;
-  [self.panelWindow orderOut:nil];
+  [self.panelWindow orderFrontRegardless];
   [self.engine startWithProcessName:@"World of Warcraft"];
 }
 
