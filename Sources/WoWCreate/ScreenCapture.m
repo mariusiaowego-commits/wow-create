@@ -33,6 +33,49 @@ static CGImageRef CreateWindowImage(CGRect bounds, CGWindowID windowID) {
 
 @implementation ScreenCapture
 
+typedef struct {
+  NSUInteger red;
+  NSUInteger gray;
+  NSUInteger total;
+} PixelCounts;
+
+- (PixelCounts)countsInRect:(CGRect)rect image:(CGImageRef)image {
+  PixelCounts counts = {0, 0, 0};
+  CGRect pixelRect = CGRectMake(
+    rect.origin.x * CGImageGetWidth(image),
+    rect.origin.y * CGImageGetHeight(image),
+    rect.size.width * CGImageGetWidth(image),
+    rect.size.height * CGImageGetHeight(image)
+  );
+  CGImageRef cropped = CGImageCreateWithImageInRect(image, pixelRect);
+  if (!cropped) return counts;
+
+  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+  size_t width = CGImageGetWidth(cropped);
+  size_t height = CGImageGetHeight(cropped);
+  size_t bytesPerRow = width * 4;
+  NSMutableData *data = [NSMutableData dataWithLength:bytesPerRow * height];
+  CGContextRef context = CGBitmapContextCreate(
+    data.mutableBytes, width, height, 8, bytesPerRow, colorSpace,
+    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
+  );
+  CGContextDrawImage(context, CGRectMake(0, 0, width, height), cropped);
+  CGContextRelease(context);
+  CGColorSpaceRelease(colorSpace);
+  CGImageRelease(cropped);
+
+  const unsigned char *bytes = data.bytes;
+  counts.total = width * height;
+  for (NSUInteger index = 0; index < counts.total; index++) {
+    unsigned char red = bytes[index * 4];
+    unsigned char green = bytes[index * 4 + 1];
+    unsigned char blue = bytes[index * 4 + 2];
+    if (red > 80 && red > green * 2 && red > blue * 2) counts.red++;
+    if (abs(red - green) < 12 && abs(green - blue) < 12 && red >= 30 && red <= 90) counts.gray++;
+  }
+  return counts;
+}
+
 - (NSArray<NSNumber *> *)processIDsForName:(NSString *)processName {
   NSWorkspace *workspace = [NSWorkspace sharedWorkspace];
   NSMutableArray *matches = [NSMutableArray array];
@@ -81,38 +124,12 @@ static CGImageRef CreateWindowImage(CGRect bounds, CGWindowID windowID) {
 }
 
 - (BOOL)isRect:(CGRect)rect redDominantInImage:(CGImageRef)image {
-  CGRect pixelRect = CGRectMake(
-    rect.origin.x * CGImageGetWidth(image),
-    rect.origin.y * CGImageGetHeight(image),
-    rect.size.width * CGImageGetWidth(image),
-    rect.size.height * CGImageGetHeight(image)
-  );
-  CGImageRef cropped = CGImageCreateWithImageInRect(image, pixelRect);
-  if (!cropped) return NO;
+  PixelCounts counts = [self countsInRect:rect image:image];
+  return counts.red > counts.total / 8 && counts.gray < counts.total / 4;
+}
 
-  CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
-  size_t width = CGImageGetWidth(cropped);
-  size_t height = CGImageGetHeight(cropped);
-  size_t bytesPerRow = width * 4;
-  NSMutableData *data = [NSMutableData dataWithLength:bytesPerRow * height];
-  CGContextRef context = CGBitmapContextCreate(
-    data.mutableBytes, width, height, 8, bytesPerRow, colorSpace,
-    kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big
-  );
-  CGContextDrawImage(context, CGRectMake(0, 0, width, height), cropped);
-  CGContextRelease(context);
-  CGColorSpaceRelease(colorSpace);
-  CGImageRelease(cropped);
-
-  const unsigned char *bytes = data.bytes;
-  NSUInteger red = 0, gray = 0, total = width * height;
-  for (NSUInteger index = 0; index < total; index++) {
-    unsigned char r = bytes[index * 4];
-    unsigned char g = bytes[index * 4 + 1];
-    unsigned char b = bytes[index * 4 + 2];
-    if (r > 80 && r > g * 2 && r > b * 2) red++;
-    if (abs(r - g) < 12 && abs(g - b) < 12 && r >= 30 && r <= 90) gray++;
-  }
-  return red > total / 8 && gray < total / 4;
+- (BOOL)isRect:(CGRect)rect grayDominantInImage:(CGImageRef)image {
+  PixelCounts counts = [self countsInRect:rect image:image];
+  return counts.gray > counts.total / 2;
 }
 @end

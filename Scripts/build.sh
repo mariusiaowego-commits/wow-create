@@ -36,9 +36,47 @@ cat > "$CONTENTS/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>LSUIElement</key><false/>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
 </dict>
 </plist>
 PLIST
+
+python3 - "$CONTENTS/Resources/AppIcon.icns" <<'PY'
+import struct
+import sys
+from pathlib import Path
+
+size = 512
+rgba = bytearray()
+for y in range(size):
+    for x in range(size):
+        dx = x - size / 2
+        dy = y - size / 2
+        radius = (dx * dx + dy * dy) ** 0.5
+        if radius > size * 0.46:
+            rgba += bytes((0, 0, 0, 0))
+        elif radius > size * 0.37:
+            rgba += bytes((255, 188, 46, 255))
+        else:
+            rgba += bytes((116, 0, 0, 255))
+
+def png_chunk(chunk_type: bytes, data: bytes) -> bytes:
+    return (struct.pack(">I", len(data)) + chunk_type + data +
+            struct.pack(">I", __import__("zlib").crc32(chunk_type + data) & 0xFFFFFFFF))
+
+raw = bytearray()
+for y in range(size):
+    raw.append(0)
+    raw += rgba[y * size * 4:(y + 1) * size * 4]
+
+png = (b"\x89PNG\r\n\x1a\n" +
+       png_chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)) +
+       png_chunk(b"IDAT", __import__("zlib").compress(bytes(raw), 9)) +
+       png_chunk(b"IEND", b""))
+
+out = Path(sys.argv[1])
+out.write_bytes(b"icns" + struct.pack(">I", 8 + len(png)) + b"ic11" + png)
+PY
 
 touch "$APP"
 echo "built: $APP"

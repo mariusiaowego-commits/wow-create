@@ -12,6 +12,7 @@ NS_ASSUME_NONNULL_BEGIN
 @interface ScreenCapture : NSObject
 - (nullable WindowSnapshot *)snapshotForProcessName:(NSString *)processName;
 - (BOOL)isRect:(CGRect)rect redDominantInImage:(CGImageRef)image;
+- (BOOL)isRect:(CGRect)rect grayDominantInImage:(CGImageRef)image;
 @end
 
 NS_ASSUME_NONNULL_END

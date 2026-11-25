@@ -4,6 +4,7 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface AutomationEngine : NSObject
 @property (nonatomic, copy, nullable) void (^onStateChange)(BOOL running, NSString *status);
+@property (nonatomic, assign) BOOL stopWhenCreationScreenDisappears;
 - (void)startWithProcessName:(NSString *)processName;
 - (void)stop;
 @property (nonatomic, readonly) BOOL isRunning;
