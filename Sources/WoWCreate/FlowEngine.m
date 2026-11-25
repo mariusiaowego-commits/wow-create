@@ -172,6 +172,7 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
 
 - (void)stepOnce {
   if (!self.isRunning) return;
+  if (self.typing) return;
   self.nextActionAt = nil;
   self.singleStepPaused = NO;
   [self tick];
@@ -343,8 +344,7 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
     case 1: {
       self.namingStep = 2;
       NSString *name = [self sanitizedName:self.mainName fallback:@"ask"];
-      [self clearTextField];
-      [self typeText:name];
+      [self replaceText:name];
       [self emitStatus:[NSString stringWithFormat:@"识别：命名界面 → 填写主名 %@", name]];
       [self pauseIfSingleStep];
       break;
@@ -356,8 +356,7 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
     case 3: {
       self.namingStep = 4;
       NSString *name = [self sanitizedName:self.secondaryName fallback:@"timemachine"];
-      [self clearTextField];
-      [self typeText:name];
+      [self replaceText:name];
       [self emitStatus:[NSString stringWithFormat:@"识别：命名界面 → 填写副名 %@", name]];
       [self pauseIfSingleStep];
       break;
@@ -369,14 +368,19 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
       [self clickPoint:FlowPointSubmit label:@"识别：命名界面 → 点击“完成”" cooldown:RandomBetween(2.4, 3.4)];
       break;
     default: {
-      NSTimeInterval sinceSubmit = self.submittedAt ? -self.submittedAt.timeIntervalSinceNow : 999;
-      if (sinceSubmit > 12 && self.submitCount < 4) {
+      if (!self.submittedAt) {
+        self.submittedAt = [NSDate date];
+        return;
+      }
+      NSTimeInterval sinceSubmit = -self.submittedAt.timeIntervalSinceNow;
+      if (self.submitCount < 4) {
+        if (sinceSubmit <= 12) return;
         self.submitCount++;
         self.submittedAt = [NSDate date];
         [self clickPoint:FlowPointSubmit
                    label:[NSString stringWithFormat:@"命名界面未变化 → 重试“完成” (%ld/4)", (long)self.submitCount]
                  cooldown:RandomBetween(3.0, 4.2)];
-      } else if (sinceSubmit > 10) {
+      } else if (sinceSubmit > 20) {
         [self stopWithStatus:@"提交后界面未变化，已停止（请检查是否被其他弹窗拦截）"];
       }
       break;
@@ -399,6 +403,7 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
   [self clickRegion:FlowRegionDialogOk
               label:[NSString stringWithFormat:@"识别：阵营不平衡弹窗 → 点击“确定”（第 %ld 次失败）", (long)self.failureCount]
             cooldown:RandomBetween(1.8, 2.4)];
+  if (self.dryRun) return;
   self.backoutRemaining = 3;
   self.backoutActive = YES;
   self.backoutStartedAt = [NSDate date];
@@ -494,8 +499,9 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
 
 - (NSString *)sanitizedName:(NSString *)input fallback:(NSString *)fallback {
   NSMutableString *cleaned = [NSMutableString string];
-  for (NSUInteger i = 0; i < input.length; i++) {
-    unichar c = [input characterAtIndex:i];
+  NSString *lowered = input.lowercaseString;
+  for (NSUInteger i = 0; i < lowered.length; i++) {
+    unichar c = [lowered characterAtIndex:i];
     if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')) {
       [cleaned appendFormat:@"%C", c];
     }
@@ -503,22 +509,29 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
   return cleaned.length > 0 ? cleaned : fallback;
 }
 
-- (void)clearTextField {
-  if (self.dryRun) return;
-  for (int i = 0; i < 16; i++) {
-    [self postKeyCode:51];
-    usleep(18 * 1000);
-  }
-  usleep(60 * 1000);
-}
-
-- (void)typeText:(NSString *)text {
+- (void)replaceText:(NSString *)text {
   if (self.dryRun || text.length == 0) return;
   self.typing = YES;
   __weak FlowEngine *weakSelf = self;
   dispatch_async(self.inputQueue, ^{
     FlowEngine *engine = weakSelf;
     if (!engine) return;
+    if (!engine.isRunning || ![engine isTargetFrontmost]) {
+      dispatch_async(dispatch_get_main_queue(), ^{ engine.typing = NO; });
+      return;
+    }
+    [engine postCommandKeyCode:0];
+    usleep(70 * 1000);
+    for (int i = 0; i < 20; i++) {
+      if (!engine.isRunning) break;
+      [engine postKeyCode:51];
+      usleep(14 * 1000);
+    }
+    for (int i = 0; i < 20; i++) {
+      if (!engine.isRunning) break;
+      [engine postKeyCode:117];
+      usleep(14 * 1000);
+    }
     for (NSUInteger i = 0; i < text.length; i++) {
       if (!engine.isRunning) break;
       if (![engine isTargetFrontmost]) break;
@@ -535,6 +548,17 @@ static CGKeyCode KeyCodeForCharacter(unichar character) {
       engine.typing = NO;
     });
   });
+}
+
+- (void)postCommandKeyCode:(CGKeyCode)keyCode {
+  CGEventRef down = CGEventCreateKeyboardEvent(NULL, keyCode, true);
+  CGEventSetFlags(down, kCGEventFlagMaskCommand);
+  CGEventRef up = CGEventCreateKeyboardEvent(NULL, keyCode, false);
+  CGEventSetFlags(up, kCGEventFlagMaskCommand);
+  CGEventPost(kCGHIDEventTap, down);
+  CGEventPost(kCGHIDEventTap, up);
+  CFRelease(down);
+  CFRelease(up);
 }
 
 - (BOOL)isTargetFrontmost {
