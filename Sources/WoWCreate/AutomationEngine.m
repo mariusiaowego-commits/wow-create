@@ -233,8 +233,20 @@ static const NSTimeInterval MaxActionInterval = 2.2;
 
 - (BOOL)applicationIsTarget:(nullable NSRunningApplication *)application {
   if (!application) return NO;
-  return [application.localizedName caseInsensitiveCompare:self.processName] == NSOrderedSame ||
-         [application.bundleIdentifier caseInsensitiveCompare:self.processName] == NSOrderedSame;
+  NSArray<NSString *> *candidates = @[
+    application.localizedName ?: @"",
+    application.bundleIdentifier ?: @"",
+    self.processName ?: @""
+  ];
+  for (NSString *candidate in candidates) {
+    NSString *value = candidate.lowercaseString;
+    if ([value containsString:@"world of warcraft"] ||
+        [value containsString:@"魔兽世界"] ||
+        [value isEqualToString:@"wow"]) {
+      return YES;
+    }
+  }
+  return NO;
 }
 
 - (void)handleApplicationActivation:(NSNotification *)notification {

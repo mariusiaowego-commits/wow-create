@@ -39,6 +39,18 @@ typedef struct {
   NSUInteger total;
 } PixelCounts;
 
+static BOOL StringMatchesTarget(NSString *value, NSString *targetAlias, BOOL allowShortAlias) {
+  if (value.length == 0) return NO;
+  NSMutableArray<NSString *> *aliases = [NSMutableArray arrayWithArray:@[@"world of warcraft", @"魔兽世界"]];
+  for (NSString *alias in aliases) {
+    if (alias.length == 0) continue;
+    if ([value.lowercaseString containsString:alias]) return YES;
+  }
+  if (allowShortAlias && [value caseInsensitiveCompare:@"wow"] == NSOrderedSame) return YES;
+  if (targetAlias.length > 0 && [value caseInsensitiveCompare:targetAlias] == NSOrderedSame) return YES;
+  return NO;
+}
+
 - (PixelCounts)countsInRect:(CGRect)rect image:(CGImageRef)image {
   PixelCounts counts = {0, 0, 0};
   CGRect pixelRect = CGRectMake(
@@ -89,9 +101,13 @@ typedef struct {
 }
 
 - (nullable WindowSnapshot *)snapshotForProcessName:(NSString *)processName {
-  NSArray *pids = [self processIDsForName:processName];
-  if (pids.count == 0) return nil;
-  NSMutableSet *pidSet = [NSMutableSet setWithArray:pids];
+  return [self snapshotForTargetAlias:processName];
+}
+
+- (nullable WindowSnapshot *)snapshotForTargetAlias:(NSString *)targetAlias {
+  NSArray *pids = [self processIDsForName:targetAlias];
+  NSMutableSet *pidSet = [NSMutableSet setWithArray:pids ?: @[]];
+  pid_t selfPid = NSProcessInfo.processInfo.processIdentifier;
 
   CFArrayRef windows = CGWindowListCopyWindowInfo(
     kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
@@ -101,11 +117,16 @@ typedef struct {
 
   for (NSDictionary *window in (__bridge NSArray *)windows) {
     NSNumber *owner = window[(__bridge NSString *)kCGWindowOwnerPID];
+    if (owner && owner.intValue == selfPid) continue;
+    NSString *ownerName = window[(__bridge NSString *)kCGWindowOwnerName] ?: @"";
+    NSString *title = window[(__bridge NSString *)kCGWindowName] ?: @"";
     NSNumber *layer = window[(__bridge NSString *)kCGWindowLayer];
     NSNumber *sharing = window[(__bridge NSString *)kCGWindowSharingState];
-    if (!owner || ![pidSet containsObject:owner]) continue;
+    BOOL ownerMatch = owner && [pidSet containsObject:owner];
+    BOOL metadataMatch = StringMatchesTarget(ownerName, targetAlias, YES) || StringMatchesTarget(title, targetAlias, NO);
+    if (!ownerMatch && !metadataMatch) continue;
     if (layer.integerValue != 0) continue;
-    if (sharing && sharing.integerValue != 0) continue;
+    (void)sharing;
 
     CGRect bounds;
     CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)window[(__bridge NSString *)kCGWindowBounds], &bounds);
